@@ -1,0 +1,53 @@
+# Web Framework
+fastapi
+uvicorn
+python-multipart
+
+# Data Validation
+pydantic
+pydantic-settings
+
+# Database
+sqlalchemy
+psycopg2-binary
+asyncpg
+alembic
+
+# AI & Agents
+langchain
+langchain-openai
+langgraph
+openai
+
+# Vector Database
+pinecone-client
+sentence-transformers
+
+# Structured Data
+pandas
+numpy
+openpyxl
+xlrd
+scikit-learn
+
+# Unstructured Data
+PyPDF2
+pdfplumber
+python-docx
+python-pptx
+pytesseract
+easyocr
+nltk
+spacy
+textblob
+
+# Messaging
+twilio
+
+# Caching
+redis
+
+# Utilities
+python-dotenv
+requests
+aiofiles
