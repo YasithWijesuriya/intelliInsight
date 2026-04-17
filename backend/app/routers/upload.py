@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional,Hashable,Literal
 from database import get_db
 from config import settings
 from app.models.data_source import DataSource, SourceType
@@ -18,7 +18,7 @@ ALLOWED_UNSTRUCTURED = {".pdf", ".docx", ".txt"}
 class GoogleSheetsRequest(BaseModel):
     url: str
     # Example: "https://docs.google.com/spreadsheets/d/SHEET_ID/edit"
-    sheet_name: Optional[str] = None
+    sheet_name: str | None = None
     # Which tab/sheet inside the spreadsheet (default = first one)
 
 class DatabaseConnectionRequest(BaseModel):
@@ -109,7 +109,6 @@ async def upload_document(
     return {"message": "Document uploaded successfully", "id": record.id, "filename": file.filename}
 
 
-# ── NEW: Google Sheets URL ──────────────────────────────────────────
 
 @router.post("/google-sheets")
 async def connect_google_sheets(
@@ -141,21 +140,39 @@ async def connect_google_sheets(
         raise HTTPException(400, "Could not extract Sheet ID from URL. Make sure the URL is correct.")
 
     sheet_id = match.group(1)
-    # sheet_id is now e.g. "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+    #Group(0) = entire url part = spreadsheets/d/([a-zA-Z0-9-_]+).
+    #Group(1) = only the sheet ID = ([a-zA-Z0-9-_]+)
 
     # Step 3: Build the CSV export URL
-    # Google Sheets lets you export any public sheet as CSV using this URL pattern
+   
     csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     if request.sheet_name:
         # If user specifies a sheet/tab name, add it as a parameter
         csv_url += f"&sheet={request.sheet_name}"
 
     # Step 4: Read the sheet data using pandas
+    empty_cells = []
+
     try:
         df = pd.read_csv(csv_url)
-        # pd.read_csv() works with URLs directly — it downloads and parses it
+
+        if df.empty:
+            raise HTTPException(400, "The Google Sheet is empty.")
+
+        empty_positions = df.isna() # This creates a DataFrame of the same shape with True for empty cells and False for filled cells
+
+        empty_cells = [
+            {
+                "row": int(i + 2) if isinstance(i, int) else None,
+                "column": col
+            }
+            for i, row in empty_positions.iterrows() #i = 0 → first row
+            for col in df.columns #col = "name", "age", "salary"
+            if row[col] #True = empty
+        ]
+
     except Exception as e:
-        raise HTTPException(400, f"Could not read Google Sheet. Make sure it is publicly shared. Error: {str(e)}")
+        raise HTTPException(400, f"Could not read Google Sheet. Error: {str(e)}")
 
     # Step 5: Save the sheet data as a local CSV file
     # (so our agents can read it the same way as uploaded files)
@@ -188,12 +205,15 @@ async def connect_google_sheets(
         "sheet_id":   sheet_id,
         "rows":       len(df),
         "columns":    df.columns.tolist(),
-        "preview":    df.head(3).to_dict(orient="records")
+        "preview":    df.head(3).to_dict(orient="records"),
         # preview = first 3 rows so user can verify it loaded correctly
+        "empty_cells": empty_cells[:20],  # limit to first 20 (important for performance)
+        "empty_count": len(empty_cells)
+
     }
 
 
-# ── NEW: SQL Database Connection ────────────────────────────────────
+
 
 @router.post("/database")
 async def connect_database(

@@ -6,6 +6,8 @@ import uvicorn, os
 
 from app.config import settings
 from app.database import test_connection, Base, engine
+from app.routers import upload
+
 app = FastAPI(
     title="IntelliInsight API",
     description="Multi-Agent AI Enterprise Intelligence Platform",
@@ -20,6 +22,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(upload.router)
 
 @app.on_event("startup")
 async def startup_event():
