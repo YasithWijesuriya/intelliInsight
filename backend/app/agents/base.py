@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 # ABC = Abstract Base Class = you cannot create a BaseAgent directly
 # abstractmethod = subclasses MUST implement this method
 
-from typing import Any, Dict
+from typing import Any, Dict,Optional
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 from config import settings
@@ -26,7 +26,7 @@ class BaseAgent(ABC):
         # Call it with: await self.llm.ainvoke([HumanMessage(content="...")])
 
     @abstractmethod
-    async def run(self, data: Any) -> Dict:
+    async def run(self, data: Any,context:Optional[str]=None) -> Dict:
         # abstract = every subclass MUST have a run() method
         # async = runs asynchronously (non-blocking)
         pass

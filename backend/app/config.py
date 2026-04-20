@@ -17,15 +17,15 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
 
     # OpenAI
-    OPENAI_API_KEY: SecretStr 
+    OPENAI_API_KEY: SecretStr
     OPENAI_MODEL: str = "gpt-4"
     OPENAI_TEMPERATURE: float = 0.7
     OPENAI_MAX_TOKENS: int = 2000
 
     # Pinecone
-    PINECONE_API_KEY: str
-    PINECONE_ENVIRONMENT: str
-    PINECONE_INDEX_NAME: str
+    PINECONE_API_KEY: str =""
+    PINECONE_ENVIRONMENT: str =""
+    PINECONE_INDEX_NAME: str = "intelliinsight"
     PINECONE_DIMENSION: int = 1536
 
     # File Upload

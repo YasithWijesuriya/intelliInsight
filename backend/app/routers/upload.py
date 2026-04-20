@@ -323,7 +323,6 @@ async def connect_database(
     }
 
 
-# ── List endpoints (keep as is) ─────────────────────────────────────
 
 @router.get("/list/structured")
 async def list_structured_files(db: Session = Depends(get_db)):
