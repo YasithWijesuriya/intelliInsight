@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn, os
+from app.agents.base import BaseAgent
 
 from app.config import settings
 from app.database import test_connection, Base, engine
@@ -34,6 +35,7 @@ async def startup_event():
     db_ok = test_connection()
     print("✅ Database: OK" if db_ok else "❌ Database: FAILED")
     print("✅ IntelliInsight ready!")
+    print("OPENAI KEY:", settings.OPENAI_API_KEY)
 
 @app.get("/")
 async def root():
@@ -45,6 +47,16 @@ async def health():
         "api": "healthy",
         "database": "connected" if test_connection() else "disconnected"
     }
+from langchain_core.messages import HumanMessage
+from app.agents.test import TestAgent
+
+from fastapi import Query
+
+@app.get("/chat")
+async def chat(query: str = Query(...)):
+    agent = TestAgent("TestAgent")
+    result = await agent.run(query)
+    return result
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0",

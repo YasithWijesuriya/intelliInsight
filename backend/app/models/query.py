@@ -3,7 +3,7 @@
 
 from sqlalchemy import Column, Integer, String, DateTime, Text, Float, Enum
 from sqlalchemy.sql import func
-from database import Base
+from app.database import Base
 import enum
 
 class QueryType(str, enum.Enum):

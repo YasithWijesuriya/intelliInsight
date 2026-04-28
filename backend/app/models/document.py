@@ -1,9 +1,10 @@
 # PURPOSE: Stores metadata for uploaded PDFs and documents
 # The actual text content is stored in unstructured_data.py (as chunks)
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, Float
+from sqlalchemy import Column, Integer, String, DateTime, Text, Float,literal
 from sqlalchemy.sql import func
-from database import Base
+from sqlalchemy.orm import Mapped,mapped_column
+from app.database import Base
 
 class Document(Base):
     __tablename__ = "documents"
@@ -15,16 +16,17 @@ class Document(Base):
     # "pdf", "docx", "txt"
 
     file_size  = Column(Integer, nullable=True)
-    page_count = Column(Integer, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    raw_text   = Column(Text, nullable=True)
+
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)    
     # Text = unlimited length string (unlike String which has a limit)
     # stores the FULL extracted text from the document
 
     summary    = Column(Text, nullable=True)
     # AI-generated summary — filled in after processing
 
-    is_indexed = Column(Integer, default=0)
+    is_indexed: Mapped[int] = mapped_column(Integer, default=0)
     # 0 = not in Pinecone yet, 1 = indexed, 2 = error
 
     last_accessed = Column(

@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict,Optional
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
-from config import settings
+from app.config import settings
 
 class BaseAgent(ABC):
 

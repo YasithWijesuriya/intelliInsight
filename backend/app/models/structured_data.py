@@ -3,7 +3,7 @@
 
 from sqlalchemy import Column, Integer, DateTime, JSON
 from sqlalchemy.sql import func
-from database import Base
+from app.database import Base
 
 class StructuredData(Base):
     __tablename__ = "structured_data"

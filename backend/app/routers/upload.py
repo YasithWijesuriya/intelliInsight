@@ -2,8 +2,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional,Hashable,Literal
-from database import get_db
-from config import settings
+from app.database import get_db
+from app.config import settings
 from app.models.data_source import DataSource, SourceType
 from app.models.document import Document
 import os, shutil, uuid

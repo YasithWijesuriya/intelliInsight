@@ -3,7 +3,7 @@
 
 from sqlalchemy import Column, Integer, String, DateTime, Float, Text
 from sqlalchemy.sql import func
-from database import Base
+from app.database import Base
 
 class ProductStock(Base):
     __tablename__ = "product_stock"
