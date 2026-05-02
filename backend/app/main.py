@@ -7,7 +7,7 @@ from app.agents.base import BaseAgent
 
 from app.config import settings
 from app.database import test_connection, Base, engine
-from app.routers import upload
+from app.routers import upload,query
 
 app = FastAPI(
     title="IntelliInsight API",
@@ -24,6 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(upload.router)
+app.include_router(query.router)
 
 @app.on_event("startup")
 async def startup_event():
