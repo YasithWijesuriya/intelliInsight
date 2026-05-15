@@ -1,86 +1,79 @@
-# PURPOSE: Answers user questions using retrieved document chunks
-# This is the final step in the RAG pipeline
-# It takes relevant chunks + question → feeds to GPT-4 → returns answer
 
-from typing import Dict, Optional
+# PURPOSE: Answers user questions using retrieved document chunks
+# IMPROVEMENTS:
+#   - Strict instruction to never go beyond what the chunks contain
+#   - Hard word limit to prevent bloated answers
+#   - Explicit fallback when chunks don't answer the question
+#   - No speculative or background "context" additions
+
+from typing import List, Dict,Optional
+from langchain_core.messages import HumanMessage, SystemMessage
 from app.agents.base import BaseAgent
+
 
 class SummaryAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("SummaryAgent")
 
-    # Detect Sinhala or English
     def detect_language(self, text: str) -> str:
-        if not text.strip():
-            return "english"
         sinhala_chars = any('\u0D80' <= c <= '\u0DFF' for c in text)
-        return "sinhala" if sinhala_chars else "english"
 
-    async def run(self, data: Dict, context: Optional[str] = None) -> Dict:
-        query = data.get("query", "")
+        if sinhala_chars:
+            return "sinhala"
+        return "english"
+
+    async def run(self, data: Dict,context:Optional[str]=None) -> Dict:
+        query  = data.get("query", "")
         chunks = data.get("chunks", [])
         user_input = context or ""
-
         language = self.detect_language(user_input)
 
-        # Convert language to readable instruction
-        language_instruction = (
-            "Respond ONLY in Sinhala"
-            if language == "sinhala"
-            else "Respond ONLY in English"
-        )
+        print(f"[DEBUG SummaryAgent] query='{query}' | chunks received={len(chunks)}")
 
-        # If no chunks found
+        if chunks:
+            print(f"[DEBUG SummaryAgent] first chunk preview: {chunks[0]}")
+
         if not chunks:
-            return self._format_result(
-                "SummaryAgent",
-                {
-                    "answer": "No relevant information found in the documents.",
-                    "sources": []
-                },
-                confidence=0.0
-            )
+            return self._format_result("SummaryAgent", {
+                "answer":  "No relevant information was found in the uploaded documents for that question.",
+                "sources": []
+            }, confidence=0.0)
 
-        # Combine chunks into readable context
+        # Only use top-3 most relevant chunks to avoid noise
+        top_chunks = sorted(chunks, key=lambda c: c.get("score", 0), reverse=True)[:3]
+
         context_text = "\n\n---\n\n".join(
-            f"[Chunk {i+1} (relevance: {c['score']})]\n{c['text']}"
-            for i, c in enumerate(chunks)
+            f"[Chunk {i+1} | relevance: {c['score']}]\n{c['text']}"
+            for i, c in enumerate(top_chunks)
         )
 
-        # FINAL PROMPT
-        prompt = f"""
-                    You are an intelligent document assistant.
+        system_msg = SystemMessage(content="""You are a precise document assistant.
 
-                    IMPORTANT RULES:
-                    - {language_instruction}
-                    - Answer ONLY using the provided document context
-                    - Do NOT add external knowledge
-                    - If the answer is not in the context, say: "This information is not in the provided documents"
-                    - Always mention which chunk the answer comes from
+STRICT RULES — follow every one without exception:
+1. Answer ONLY from the document chunks provided. Do not add background knowledge.
+2. If the chunks do not contain enough information to answer, say exactly:
+   "The documents don't contain enough information to answer this question."
+3. Be concise. Maximum 150 words unless the question explicitly asks for a list or table.
+4. Never pad the answer with phrases like "Based on the provided context..." or "In conclusion...".
+5. Never speculate or infer beyond what is explicitly stated in the chunks.
+6. If quoting, keep quotes under 20 words.""")
 
-                    DOCUMENT CONTEXT:
-                    {context_text}
+        user_msg = HumanMessage(content=f"""DOCUMENT CHUNKS:
+{context_text}
 
-                    USER QUESTION:
-                    {query}
+QUESTION: {query}
 
-                    Provide a clear and accurate answer.
-                    """
+Answer concisely and only from the chunks above.""")
 
-        # Call LLM
-        response = await self.llm.ainvoke(prompt)
+        response = await self.llm.ainvoke([system_msg, user_msg])
 
-        # Return formatted result
-        return self._format_result(
-            "SummaryAgent",
-            {
-                "answer": response.content,
-                "chunks_used": len(chunks),
-                "top_relevance": chunks[0]["score"],
-                "sources": [
-                    {"doc_id": c.get("doc_id"), "score": c.get("score")}
-                    for c in chunks
-                ]
-            }
-        )
+        return self._format_result("SummaryAgent", {
+            "answer":        response.content,
+            "chunks_used":   len(top_chunks),
+            "top_relevance": top_chunks[0]["score"] if top_chunks else 0,
+            "sources":       [
+                {"doc_id": c.get("document_id"), "score": c["score"]}
+                for c in top_chunks
+            ]
+        })

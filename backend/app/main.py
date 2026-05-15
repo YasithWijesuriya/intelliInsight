@@ -18,7 +18,7 @@ app = FastAPI(
 # Allow React frontend to call this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=[ "http://localhost:5173" ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,6 +37,7 @@ async def startup_event():
     print("✅ Database: OK" if db_ok else "❌ Database: FAILED")
     print("✅ IntelliInsight ready!")
     print("OPENAI KEY:", settings.OPENAI_API_KEY)
+    print("Pinecone key:", settings.PINECONE_API_KEY[:5])
 
 @app.get("/")
 async def root():
@@ -58,6 +59,7 @@ async def chat(query: str = Query(...)):
     agent = TestAgent("TestAgent")
     result = await agent.run(query)
     return result
+
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0",

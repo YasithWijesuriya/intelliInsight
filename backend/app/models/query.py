@@ -12,6 +12,8 @@ class QueryType(str, enum.Enum):
     ADVISORY    = "advisory"
     COMPARATIVE = "comparative"
     HYBRID      = "hybrid"
+    STRUCTURED   = "structured"
+    UNSTRUCTURED = "unstructured"
 
 class Query(Base):
     __tablename__ = "queries"

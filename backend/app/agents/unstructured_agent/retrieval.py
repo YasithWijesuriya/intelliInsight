@@ -18,8 +18,7 @@ class RetrievalAgent:
         pc          = Pinecone(api_key=settings.PINECONE_API_KEY)
         self.index  = pc.Index(settings.PINECONE_INDEX_NAME)
 
-    def retrieve(self, query: str, top_k: int = 5,
-                 doc_id: Optional[int] = None) -> List[Dict]:
+    def retrieve(self, query: str, top_k: int = 5,doc_id: Optional[int] = None) -> List[Dict]:
 
         # Step 1: Embed the query the SAME WAY we embedded documents
         # (must use same model so the vector spaces match)
@@ -39,19 +38,23 @@ class RetrievalAgent:
             include_metadata=True, # include the text content
             filter=filter_dict #type: ignore
         )
+        matches = results.matches or []
 
+        print(f"🔍 Query: {query}")
+        print(f"📊 doc_id filter: {doc_id} | Total matches: {len(matches)}")
+
+        for m in matches:
+            print("Score:", m.score)
         # Step 4: Return chunks sorted by relevance score
         return [
             {
                 "text":         match.metadata.get("text", ""),
                 "score":        round(match.score, 3),
                 # score = cosine similarity (0 to 1, higher = more relevant)
-                "doc_id":       match.metadata.get("doc_id"),
+                "document_id":  match.metadata.get("document_id"),
                 "chunk_index":  match.metadata.get("chunk_index"),
                 "pinecone_id":  match.id
             }
-            for match in results.matches #type: ignore
-            #! So who created matches? Pinecone system itself
             # Pinecone internally builds a response like this:
 
             #         {
@@ -61,5 +64,7 @@ class RetrievalAgent:
             #             "namespace": "",
             #             "usage": {...}
             #         }
-            if match.score > 0.7   # only return relevant results (>70% match)
+            
+            for match in matches
+            if match.score > 0.1 
         ]

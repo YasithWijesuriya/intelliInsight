@@ -1,0 +1,2827 @@
+============================================================
+============================================================
+User Query / File Upload
+        ↓
+FastAPI Backend (:8000)
+        ↓
+Data Classification Engine
+   ↙              ↘
+Structured         Unstructured
+(Excel/CSV)        (PDF/Docs)
+   ↓                    ↓
+LangGraph           LangGraph
+Struct Graph        Unstruct Graph
+   ↓                    ↓
+Trend Agent         Ingestion Agent
+Anomaly Agent       Chunking Agent
+KPI Engine          Embedding Agent
+Financial Agent     Retrieval Agent
+Advisor Agent       Summary Agent
+        ↘          ↙
+       Cross-Source Synthesis
+              ↓
+       Final Response Generator
+              ↓
+       React Dashboard (:3000)
+
+============================================================
+============================================================
+backend/
+└── app/
+    ├── agents/
+    │   ├── cross_source_agents/   (recommendation, response_generator, validation)
+    │   ├── inventory_agents/      (alert_generator, detector, parser, whatsapp_sender)
+    │   ├── query_processors/      (analyzer, classifier, supervisor)
+    │   ├── structured_agents/     (advisor, anomaly, financial, ingestion, kpi, trend)
+    │   ├── unstructured_agent/    (chunking, email, embedding, ingestion, ocr, retrieval, summary, synthesis)
+    │   ├── base.py
+    │   └── orchestrator.py
+    ├── models/                    (user, data_source, document, query, analysis, product_stock, vector_index...)
+    ├── routers/                   (auth, documents, query, stock, structural_analysis, upload, webhook, websocket)
+    ├── schemas/                   (analysis, data_source, document, query, stock, user)
+    ├── services/                  (document_service, file_service, notification_service, stock_service...)
+    ├── uploads/
+    │   ├── stock/
+    │   ├── structured/
+    │   └── unstructured/
+    └── utils/
+        ├── config.py
+        ├── database.py
+        └── main.py  ← (this is actually backend/app/main.py)
+
+============================================================
+============================================================
+http://localhost:8000/health   → {"api":"healthy","database":"connected"}
+http://localhost:8000/docs     → Swagger UI (auto-generated API docs)
+
+============================================================
+LANGUAGE: python
+============================================================
+from sqlalchemy import Column, Integer, String   # column types
+from app.utils.database import Base              # parent class
+
+class SomeName(Base):           # Base = SQLAlchemy parent
+    __tablename__ = "table_name"  # actual PostgreSQL table name
+
+    id   = Column(Integer, primary_key=True)  # auto-incrementing ID
+    name = Column(String, nullable=False)      # required text column
+
+============================================================
+FILE: File: `backend/app/models/user.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Stores user accounts for the platform
+# COLUMNS: id, email, username, hashed_pw, is_active, is_admin, timestamps
+
+from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy.sql import func
+from app.database import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    # index=True creates a DB index → faster queries by id
+
+    email      = Column(String, unique=True, nullable=False, index=True)
+    # unique=True → no two users can have same email
+    # nullable=False → this field is REQUIRED
+
+    username   = Column(String, unique=True, nullable=False)
+    hashed_pw  = Column(String, nullable=False)
+    # NEVER store plain passwords — always hash them first
+
+    is_active  = Column(Boolean, default=True)
+    is_admin   = Column(Boolean, default=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # server_default=func.now() → DB sets this automatically on INSERT
+
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # onupdate=func.now() → DB updates this automatically on UPDATE
+
+============================================================
+FILE: File: `backend/app/models/data_source.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Tracks every uploaded file or Google Sheets link
+# When a user uploads Excel, CSV, or connects Google Sheets → stored here
+
+from sqlalchemy import Column, Integer, String, DateTime, Enum, JSON
+from sqlalchemy.sql import func
+from app.database import Base
+import enum
+
+class SourceType(str, enum.Enum):
+    # str enum = stored as string in DB ("excel", "csv", etc.)
+    EXCEL         = "excel"
+    CSV           = "csv"
+    PDF           = "pdf"
+    GOOGLE_SHEETS = "google_sheets"
+    DATABASE      = "database"
+
+class DataSource(Base):
+    __tablename__ = "data_sources"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    user_id     = Column(Integer, nullable=True)
+    # nullable=True → optional, we don't have auth yet
+
+    name        = Column(String, nullable=False)
+    # the original filename e.g. "Q3_Revenue.xlsx"
+
+    source_type = Column(Enum(SourceType), nullable=False)
+    # stored as "excel", "csv" etc. in the DB
+
+    file_path   = Column(String, nullable=True)
+    # local disk path e.g. "./uploads/structured/abc123_file.xlsx"
+
+    url         = Column(String, nullable=True)
+    # only for Google Sheets links
+
+    file_size   = Column(Integer, nullable=True)
+    # in bytes
+
+    row_count   = Column(Integer, nullable=True)
+    # filled in AFTER parsing the file
+
+    columns     = Column(JSON, nullable=True)
+    # JSON list of column names e.g. ["Revenue", "Cost", "Profit"]
+    # JSON type lets you store lists/dicts directly in PostgreSQL
+
+    is_processed = Column(Integer, default=0)
+    # 0 = pending, 1 = done, 2 = error
+
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+============================================================
+FILE: File: `backend/app/models/document.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Stores metadata for uploaded PDFs and documents
+# The actual text content is stored in unstructured_data.py (as chunks)
+
+from sqlalchemy import Column, Integer, String, DateTime, Text, Float,literal
+from sqlalchemy.sql import func
+from sqlalchemy.orm import Mapped,mapped_column
+from app.database import Base
+
+class  Document(Base):
+    __tablename__ = "documents"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    filename   = Column(String, nullable=False)
+    file_path  = Column(String, nullable=False)
+    file_type  = Column(String, nullable=False)
+    # "pdf", "docx", "txt"
+
+    file_size  = Column(Integer, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)    
+    # Text = unlimited length string (unlike String which has a limit)
+    # stores the FULL extracted text from the document
+
+    summary    = Column(Text, nullable=True)
+    # AI-generated summary — filled in after processing
+
+    is_indexed: Mapped[int] = mapped_column(Integer, default=0)
+    # 0 = not in Pinecone yet, 1 = indexed, 2 = error
+
+    last_accessed = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now()
+    )
+
+    # optional soft delete (safer than hard delete)
+    is_deleted = Column(Integer, default=0)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+
+============================================================
+FILE: File: `backend/app/models/structured_data.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Stores parsed rows from Excel/CSV files
+# Think of this as a flexible row store — each row becomes a JSON record
+
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Float
+from sqlalchemy.sql import func
+from app.utils.database import Base
+
+class StructuredData(Base):
+    __tablename__ = "structured_data"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    data_source_id = Column(Integer, nullable=False, index=True)
+    # links back to the data_sources table
+
+    row_index      = Column(Integer, nullable=False)
+    # which row number this was in the original file
+
+    row_data       = Column(JSON, nullable=False)
+    # the actual row as JSON e.g. {"Revenue": 50000, "Cost": 30000, "Date": "2024-01"}
+
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+
+============================================================
+FILE: File: `backend/app/models/unstructured_data.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Stores text chunks from documents
+# After chunking a PDF, each chunk is stored as one row here
+
+from sqlalchemy import Column, Integer, String, DateTime, Text
+from sqlalchemy.sql import func
+from app.database import Base
+
+class UnstructuredData(Base):
+    __tablename__ = "unstructured_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, nullable=False, index=True)
+    # links back to the documents table
+
+    chunk_index = Column(Integer, nullable=False)
+    # which chunk number (0, 1, 2, ...)
+
+    chunk_text  = Column(Text, nullable=False)
+    # the actual text content of this chunk
+
+    pinecone_id = Column(String, nullable=True)
+    # the ID used in Pinecone e.g. "doc3_chunk7"
+    
+    last_accessed = Column(
+    DateTime(timezone=True),
+    server_default=func.now(),
+    onupdate=func.now()
+    )
+
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+============================================================
+FILE: File: `backend/app/models/query.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Logs every query a user asks + the AI's answer
+# Important for: history, debugging, analytics
+
+from sqlalchemy import Column, Integer, String, DateTime, Text, Float, Enum
+from sqlalchemy.sql import func
+from app.database import Base
+import enum
+
+class QueryType(str, enum.Enum):
+    FINANCIAL   = "financial"
+    DOCUMENT    = "document"
+    ADVISORY    = "advisory"
+    COMPARATIVE = "comparative"
+    HYBRID      = "hybrid"
+    STRUCTURED   = "structured"
+    UNSTRUCTURED = "unstructured"
+
+class Query(Base):
+    __tablename__ = "queries"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    user_query   = Column(Text, nullable=False)
+    # exactly what the user typed
+
+    query_type   = Column(Enum(QueryType), nullable=True)
+    # classified by the AI: financial/document/advisory/hybrid
+
+    reWriten_query = Column(Text, nullable=True)
+    # after rewriting for clarity/consistency
+
+    response     = Column(Text, nullable=True)
+    # the final AI-generated answer
+
+    sources_used = Column(String, nullable=True)
+    # which agents ran e.g. "TrendAgent,AnomalyAgent,KPIEngine"
+
+    confidence   = Column(Float, nullable=True)
+    # 0.0 to 1.0 — how confident the AI is
+
+    exec_time_ms = Column(Integer, nullable=True)
+    # how long it took in milliseconds
+
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+============================================================
+FILE: File: `backend/app/models/analysis.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Stores results from each AI agent run
+# When TrendAgent analyses a file, the result is stored here
+
+from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Float
+from sqlalchemy.sql import func
+from app.database import Base
+
+class Analysis(Base):
+    __tablename__ = "analyses"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    data_source_id = Column(Integer, nullable=True)
+    query_id       = Column(Integer, nullable=True)
+
+    analysis_type  = Column(String, nullable=False)
+    # "trend", "anomaly", "kpi", "financial", "advisory"
+
+    agent_name     = Column(String, nullable=False)
+    # "TrendAgent", "AnomalyAgent", "KPIEngine" etc.
+
+    result_json    = Column(JSON, nullable=True)
+    # full structured result as JSON — can be charts data, tables, etc.
+
+    summary        = Column(Text, nullable=True)
+    # human-readable summary of the result
+
+    confidence     = Column(Float, nullable=True)
+
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+
+============================================================
+FILE: File: `backend/app/models/product_stock.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Stores inventory/stock data rows
+# Used by inventory_agents for stock monitoring and alerts
+
+from sqlalchemy import Column, Integer, String, DateTime, Float, Text
+from sqlalchemy.sql import func
+from app.utils.database import Base
+
+class ProductStock(Base):
+    __tablename__ = "product_stock"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    product_name = Column(String, nullable=False)
+    product_code = Column(String, nullable=True, index=True)
+    category     = Column(String, nullable=True)
+
+    quantity     = Column(Float, nullable=False, default=0)
+    unit_price   = Column(Float, nullable=True)
+    reorder_level= Column(Float, nullable=True, default=50)
+    # if quantity drops below reorder_level → send alert
+
+    supplier     = Column(String, nullable=True)
+    location     = Column(String, nullable=True)
+    notes        = Column(Text, nullable=True)
+
+    data_source_id = Column(Integer, nullable=True)
+    # which uploaded file this came from
+
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at   = Column(DateTime(timezone=True), onupdate=func.now())
+
+============================================================
+FILE: File: `backend/app/models/vector_index.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Tracks which documents have been indexed in Pinecone
+# Prevents duplicate indexing and helps with re-indexing
+
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
+from sqlalchemy.sql import func
+from app.utils.database import Base
+
+class VectorIndex(Base):
+    __tablename__ = "vector_indices"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, nullable=False, index=True)
+    pinecone_id = Column(String, nullable=False)
+    # the Pinecone vector ID e.g. "doc5_chunk12"
+
+    chunk_index = Column(Integer, nullable=False)
+    chunk_text  = Column(String, nullable=True)
+
+    is_active   = Column(Boolean, default=True)
+    # False = deleted from Pinecone
+
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+============================================================
+FILE: File: `backend/app/models/vector_index.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: This file is the most important one in models/
+# SQLAlchemy's Base.metadata.create_all() only creates tables for models
+# it KNOWS about. You tell it by importing them all here.
+
+from app.models.user import User
+from app.models.data_source import DataSource, SourceType
+from app.models.document import Document
+from app.models.structured_data import StructuredData
+from app.models.unstructured_data import UnstructuredData
+from app.models.query import Query, QueryType
+from app.models.analysis import Analysis
+from app.models.product_stock import ProductStock
+from app.models.vector_index import VectorIndex
+
+# Now main.py's Base.metadata.create_all(bind=engine)
+# will create ALL 9 tables automatically
+
+============================================================
+FILE: File: `backend/app/models/vector_index.py`
+LANGUAGE: sql
+============================================================
+-- Run this in psql or pgAdmin:
+\dt
+-- You should see ALL 9 tables listed
+
+============================================================
+FILE: File: `backend/app/models/vector_index.py`
+============================================================
+DATABASE MODEL (models/)      SCHEMA (schemas/)
+─────────────────────         ─────────────────
+SQLAlchemy class              Pydantic class
+Maps to DB table              Maps to API request/response
+Used for DB read/write        Used for data validation
+Has Column() fields           Has type annotations
+
+============================================================
+FILE: File: `backend/app/schemas/data_source.py`
+LANGUAGE: python
+============================================================
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import datetime
+
+class DataSourceCreate(BaseModel):
+    # This is what the user SENDS when creating a data source
+    name: str
+    source_type: str
+    url: Optional[str] = None  # only for Google Sheets
+
+class DataSourceResponse(BaseModel):
+    # This is what we SEND BACK to the user
+    id: int
+    name: str
+    source_type: str
+    file_size: Optional[int] = None
+    row_count: Optional[int] = None
+    columns: Optional[List[str]] = None
+    is_processed: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        # This tells Pydantic to read from SQLAlchemy model attributes
+        # Without this, returning a SQLAlchemy object would fail
+
+============================================================
+FILE: File: `backend/app/schemas/query.py`
+LANGUAGE: python
+============================================================
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+class QueryRequest(BaseModel):
+    # What the frontend sends when the user asks a question
+    query: str
+    data_source_id: Optional[int] = None
+    # If user wants to ask about a specific uploaded file
+
+    document_id: Optional[int] = None
+    # If user wants to ask about a specific document
+
+class QueryResponse(BaseModel):
+    # What we send back after the AI processes the query
+    id: int
+    user_query: str
+    query_type: Optional[str] = None
+    response: Optional[str] = None
+    sources_used: Optional[str] = None
+    confidence: Optional[float] = None
+    exec_time_ms: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class QuickQueryResponse(BaseModel):
+    # A simpler response for streaming / quick answers
+    query_type: str
+    answer: str
+    confidence: float
+    agents_used: List[str]
+    execution_time_ms: int
+
+    from typing import List  # add this import at top of file
+
+============================================================
+FILE: File: `backend/app/schemas/document.py`
+LANGUAGE: python
+============================================================
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+class DocumentResponse(BaseModel):
+    id: int
+    filename: str
+    file_type: str
+    file_size: Optional[int] = None
+    page_count: Optional[int] = None
+    summary: Optional[str] = None
+    is_indexed: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class DocumentIndexRequest(BaseModel):
+    # Sent when user wants to index a document into Pinecone
+    document_id: int
+
+============================================================
+FILE: File: `backend/app/schemas/user.py`
+LANGUAGE: python
+============================================================
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+from datetime import datetime
+
+class UserCreate(BaseModel):
+    email: str
+    username: str
+    password: str  # plain password (we hash it in the service)
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    username: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+============================================================
+FILE: File: `backend/app/routers/upload.py`
+LANGUAGE: python
+============================================================
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Optional,Hashable,Literal
+from app.database import get_db
+from app.config import settings
+from app.models.data_source import DataSource, SourceType
+from app.models.document import Document
+from app.services.document_service import DocumentService
+from app.tasks.document_tasks import process_doc_task
+from fastapi import BackgroundTasks
+import os, shutil, uuid
+
+router = APIRouter(prefix="/upload", tags=["Upload"])
+
+ALLOWED_STRUCTURED   = {".xlsx", ".xls", ".csv"}
+ALLOWED_UNSTRUCTURED = {".pdf", ".docx", ".txt"}
+
+
+# ── Request body schemas (defined here to keep it simple) ──────────
+class GoogleSheetsRequest(BaseModel):
+    url: str
+    # Example: "https://docs.google.com/spreadsheets/d/SHEET_ID/edit"
+    sheet_name: str | None = None
+    # Which tab/sheet inside the spreadsheet (default = first one)
+
+class DatabaseConnectionRequest(BaseModel):
+    connection_string: str
+    # Example: "postgresql://user:pass@host:5432/dbname"
+    table_name: str
+    # Which table to read from
+    query: Optional[str] = None
+    # Optional custom SQL query instead of reading whole table
+    # Example: "SELECT * FROM sales WHERE year = 2024"
+
+
+# ── EXISTING: File Upload (keep these exactly as they are) ──────────
+
+@router.post("/structured")
+async def upload_structured_file(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):  
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_STRUCTURED:
+        raise HTTPException(400, f"File type '{ext}' not allowed. Use: {ALLOWED_STRUCTURED}")
+
+    uid       = str(uuid.uuid4())[:8]
+    filename  = f"{uid}_{file.filename}"
+    save_dir  = os.path.join(settings.UPLOAD_DIR, "structured")
+    os.makedirs(save_dir, exist_ok=True)
+    file_path = os.path.join(save_dir, filename)
+
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    src_type = SourceType.EXCEL if ext in {".xlsx", ".xls"} else SourceType.CSV
+
+    record = DataSource(
+        name=file.filename,
+        source_type=src_type,
+        file_path=file_path,
+        file_size=os.path.getsize(file_path)
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+
+    return {
+        "message":    "File uploaded successfully",
+        "id":         record.id,
+        "filename":   file.filename,
+        "path":       file_path,
+        "size_bytes": record.file_size
+    }
+
+
+@router.post("/document")
+async def upload_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):  
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_UNSTRUCTURED:
+        raise HTTPException(400, f"Use: {ALLOWED_UNSTRUCTURED}")
+
+    uid       = str(uuid.uuid4())[:8]
+    filename  = f"{uid}_{file.filename}"
+    save_dir  = os.path.join(settings.UPLOAD_DIR, "unstructured")
+    # save_dir = uploads/unstructured
+    os.makedirs(save_dir, exist_ok=True)
+    file_path = os.path.join(save_dir, filename)
+    # file_path = uploads/unstructured/1234_report.pdf
+
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f) #copyfileobj = saves file physically
+
+    record = Document(
+        filename=file.filename,
+        file_path=file_path,
+        file_type=ext.lstrip("."),
+        file_size=os.path.getsize(file_path)
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+
+    background_tasks.add_task(
+        process_doc_task,
+        record.id,
+        file_path
+    )
+
+    return {
+        "message": "Document uploaded. Processing in background...",
+        "id": record.id
+    }
+
+
+
+@router.post("/google-sheets")
+async def connect_google_sheets(
+    request: GoogleSheetsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    How Google Sheets reading works:
+    1. User gives us a public Google Sheets URL
+    2. We extract the SHEET_ID from the URL
+    3. We use that ID to build a CSV export URL (Google provides this for free)
+    4. We read it directly with pandas — no API key needed for public sheets!
+
+    Example URL:
+    https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/edit
+                                           ↑ this is the SHEET_ID 
+    """
+    import pandas as pd
+    import re
+
+    # Step 1: Validate it's actually a Google Sheets URL
+    if "docs.google.com/spreadsheets" not in request.url:
+        raise HTTPException(400, "URL must be a Google Sheets link")
+
+    # Step 2: Extract the sheet ID from the URL
+    # URL format: /spreadsheets/d/{SHEET_ID}/edit
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", request.url)
+    if not match:
+        raise HTTPException(400, "Could not extract Sheet ID from URL. Make sure the URL is correct.")
+
+    sheet_id = match.group(1)
+    #Group(0) = entire url part = spreadsheets/d/([a-zA-Z0-9-_]+).
+    #Group(1) = only the sheet ID = ([a-zA-Z0-9-_]+)
+
+    # Step 3: Build the CSV export URL
+   
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    if request.sheet_name:
+        # If user specifies a sheet/tab name, add it as a parameter
+        csv_url += f"&sheet={request.sheet_name}"
+
+    # Step 4: Read the sheet data using pandas
+    empty_cells = []
+
+    try:
+        df = pd.read_csv(csv_url)
+
+        if df.empty:
+            raise HTTPException(400, "The Google Sheet is empty.")
+
+        empty_positions = df.isna() # This creates a DataFrame of the same shape with True for empty cells and False for filled cells
+
+        empty_cells = [
+            {
+                "row": int(i + 2) if isinstance(i, int) else None,
+                "column": col
+            }
+            for i, row in empty_positions.iterrows() #i = 0 → first row
+            for col in df.columns #col = "name", "age", "salary"
+            if row[col] #True = empty
+        ]
+
+    except Exception as e:
+        raise HTTPException(400, f"Could not read Google Sheet. Error: {str(e)}")
+
+    # Step 5: Save the sheet data as a local CSV file
+    # (so our agents can read it the same way as uploaded files)
+    uid      = str(uuid.uuid4())[:8]
+    filename = f"{uid}_gsheet_{sheet_id[:8]}.csv"
+    save_dir = os.path.join(settings.UPLOAD_DIR, "structured")
+    os.makedirs(save_dir, exist_ok=True)
+    file_path = os.path.join(save_dir, filename)
+
+    df.to_csv(file_path, index=False)
+    # index=False means don't write the row numbers as a column
+
+    # Step 6: Save record to database
+    record = DataSource(
+        name=f"Google Sheet: {sheet_id[:12]}...",
+        source_type=SourceType.GOOGLE_SHEETS,
+        file_path=file_path,       # we store the LOCAL csv path
+        url=request.url,           # we also store the original URL
+        file_size=os.path.getsize(file_path),
+        row_count=len(df),
+        columns=df.columns.tolist()
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+
+    return {
+        "message":    "Google Sheet connected successfully",
+        "id":         record.id,
+        "sheet_id":   sheet_id,
+        "rows":       len(df),
+        "columns":    df.columns.tolist(),
+        "preview":    df.head(3).to_dict(orient="records"),
+        # preview = first 3 rows so user can verify it loaded correctly
+        "empty_cells": empty_cells[:20],  # limit to first 20 (important for performance)
+        "empty_count": len(empty_cells)
+
+    }
+
+
+
+
+@router.post("/database")
+async def connect_database(
+    request: DatabaseConnectionRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    How SQL database reading works:
+    1. User gives us a connection string + table name
+    2. We use SQLAlchemy to connect to THEIR database (not our PostgreSQL)
+    3. We read the table into a pandas DataFrame using pd.read_sql()
+    4. We save it as a CSV file locally
+    5. From this point it's treated exactly like an uploaded CSV
+
+    Supported databases:
+    - PostgreSQL: postgresql://user:pass@host:5432/dbname
+    - MySQL:      mysql+pymysql://user:pass@host:3306/dbname
+    - SQLite:     sqlite:///path/to/file.db
+    - MSSQL:      mssql+pyodbc://user:pass@host/dbname?driver=ODBC+Driver+17
+    """
+    import pandas as pd
+    from sqlalchemy import create_engine, text, inspect
+
+    # Step 1: Connect to the user's database
+    try:
+        external_engine = create_engine(request.connection_string)
+        # This creates a connection to THEIR database
+        # We use "external_engine" to distinguish from OUR app's engine
+
+        # Test the connection immediately
+        with external_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            # If this fails, the connection string is wrong
+
+    except Exception as e:
+        raise HTTPException(400, f"Database connection failed. Check your connection string. Error: {str(e)}")
+
+    # Step 2: Verify the table exists
+    try:
+        inspector   = inspect(external_engine)
+        all_tables  = inspector.get_table_names()
+        # inspector.get_table_names() lists all tables in the database
+
+        if request.table_name not in all_tables:
+            raise HTTPException(
+                400,
+                f"Table '{request.table_name}' not found. Available tables: {all_tables}"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Could not inspect database: {str(e)}")
+
+    # Step 3: Read the data
+    try:
+        if request.query:
+            # User provided a custom SQL query
+            # Example: "SELECT * FROM sales WHERE year = 2024 LIMIT 1000"
+            sql = request.query
+        else:
+            # Read the whole table
+            sql = f"SELECT * FROM {request.table_name}"
+
+        df = pd.read_sql(sql, external_engine)
+        # pd.read_sql() runs the SQL and returns a DataFrame
+
+    except Exception as e:
+        raise HTTPException(400, f"Query failed: {str(e)}")
+
+    finally:
+        external_engine.dispose()
+        # Always close the connection when done
+        # dispose() closes ALL connections in the pool
+
+    # Step 4: Save as local CSV (same as Google Sheets approach)
+    uid       = str(uuid.uuid4())[:8]
+    filename  = f"{uid}_db_{request.table_name}.csv"
+    save_dir  = os.path.join(settings.UPLOAD_DIR, "structured")
+    os.makedirs(save_dir, exist_ok=True)
+    file_path = os.path.join(save_dir, filename)
+
+    df.to_csv(file_path, index=False)
+
+    # Step 5: Save to our database
+    # NOTE: We do NOT store the connection_string for security
+    # Storing passwords in your DB is a security risk
+    record = DataSource(
+        name=f"DB Table: {request.table_name}",
+        source_type=SourceType.DATABASE,
+        file_path=file_path,
+        file_size=os.path.getsize(file_path),
+        row_count=len(df),
+        columns=df.columns.tolist()
+        # url is left None — we don't store connection strings
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+
+    return {
+        "message":  "Database table connected successfully",
+        "id":       record.id,
+        "table":    request.table_name,
+        "rows":     len(df),
+        "columns":  df.columns.tolist(),
+        "preview":  df.head(3).to_dict(orient="records")
+    }
+
+
+
+@router.get("/list/structured")
+async def list_structured_files(db: Session = Depends(get_db)):
+    sources = db.query(DataSource).filter(
+        DataSource.source_type.in_([
+            SourceType.EXCEL,
+            SourceType.CSV,
+            SourceType.GOOGLE_SHEETS,   # now included
+            SourceType.DATABASE          # now included
+        ])
+    ).all()
+    return sources
+
+
+@router.get("/list/documents")
+async def list_documents(db: Session = Depends(get_db)):
+    docs = db.query(Document).all()
+    return docs
+
+============================================================
+FILE: File: `backend/app/routers/upload.py`
+LANGUAGE: python
+============================================================
+# Add these lines to backend/app/main.py
+
+# Add to imports at top:
+from app.routers import upload
+
+# Add AFTER the middleware section, BEFORE the route definitions:
+app.include_router(upload.router)
+
+# Your main.py should now look like this:
+# ─────────────────────────────────────────
+# backend/app/main.py
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn, os
+from app.agents.base import BaseAgent
+
+from app.config import settings
+from app.database import test_connection, Base, engine
+from app.routers import upload,query
+
+app = FastAPI(
+    title="IntelliInsight API",
+    description="Multi-Agent AI Enterprise Intelligence Platform",
+    version="1.0.0"
+)
+
+# Allow React frontend to call this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[ "http://localhost:5173" ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(upload.router)
+app.include_router(query.router)
+
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 IntelliInsight starting...")
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    os.makedirs("./logs", exist_ok=True)
+    # Create all DB tables automatically
+    Base.metadata.create_all(bind=engine)
+    db_ok = test_connection()
+    print("✅ Database: OK" if db_ok else "❌ Database: FAILED")
+    print("✅ IntelliInsight ready!")
+    print("OPENAI KEY:", settings.OPENAI_API_KEY)
+    print("Pinecone key:", settings.PINECONE_API_KEY[:5])
+
+@app.get("/")
+async def root():
+    return {"message": "IntelliInsight API", "status": "running"}
+
+@app.get("/health")
+async def health():
+    return {
+        "api": "healthy",
+        "database": "connected" if test_connection() else "disconnected"
+    }
+from langchain_core.messages import HumanMessage
+from app.agents.test import TestAgent
+
+from fastapi import Query
+
+@app.get("/chat")
+async def chat(query: str = Query(...)):
+    agent = TestAgent("TestAgent")
+    result = await agent.run(query)
+    return result
+
+
+if __name__ == "__main__":
+    uvicorn.run("app.main:app", host="0.0.0.0",
+                port=settings.API_PORT, reload=True)
+============================================================
+FILE: File: `backend/app/routers/upload.py`
+============================================================
+1. Restart uvicorn
+2. Open: http://localhost:8000/docs
+3. You should see /upload/structured and /upload/document endpoints
+4. Click "Try it out" on /upload/structured
+5. Upload any Excel or CSV file
+6. Expected response:
+   {"message": "File uploaded successfully", "id": 1, "filename": "..."}
+7. Check: uploads/structured/ folder — your file should be there
+8. Check DB: SELECT * FROM data_sources;
+
+============================================================
+FILE: File: `backend/app/agents/base.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Parent class for ALL agents
+# Every agent inherits from this so they all have:
+# - A name
+# - Access to the LLM (GPT-4)
+# - A consistent result format
+
+from abc import ABC, abstractmethod
+# ABC = Abstract Base Class = you cannot create a BaseAgent directly
+# abstractmethod = subclasses MUST implement this method
+
+from typing import Any, Dict,Optional
+from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
+from app.config import settings
+
+class BaseAgent(ABC):
+
+    def __init__(self, name: str):
+        self.name = name
+        self.llm  = ChatOpenAI(
+            model=settings.OPENAI_MODEL,         
+            temperature=settings.OPENAI_TEMPERATURE,  
+            api_key=SecretStr(settings.OPENAI_API_KEY.get_secret_value())
+        )
+        # self.llm is now your GPT-4 connection
+        # Call it with: await self.llm.ainvoke([HumanMessage(content="...")])
+
+    @abstractmethod
+    async def run(self, data: Any,context:Optional[str]=None) -> Dict:
+        # abstract = every subclass MUST have a run() method
+        # async = runs asynchronously (non-blocking)
+        pass
+
+    def _format_result(self, agent: str, result: Any, confidence: float = 0.9) -> Dict:
+        # Consistent output format for ALL agents
+        return {
+            "agent":      agent,
+            "result":     result,
+            "confidence": confidence
+        }
+
+
+
+============================================================
+FILE: File: `backend/app/agents/structured_agents/ingestion.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Loads Excel/CSV files into a Pandas DataFrame
+# This is always the FIRST step in structured data processing
+# DataFrame = a table in Python (like Excel in code)
+
+import pandas as pd
+from typing import Optional
+from  app.agents.base import BaseAgent
+
+class StructuredIngestionAgent(BaseAgent):
+
+    def __init__(self):
+        super().__init__("StructuredIngestionAgent")
+
+    async def run(self, data: str,context=None) -> dict:
+        file_path = data
+        df = self.load_file(file_path)
+     
+        if df is None:
+            return self._format_result("StructuredIngestionAgent",
+                {"error": "Could not load file"}, confidence=0.0)
+
+        # Basic info about the loaded data
+        return self._format_result("StructuredIngestionAgent", {
+            "shape":   list(df.shape),     # [rows, columns]
+            "columns": df.columns.tolist(),
+            "dtypes":  {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "preview": df.head(3).to_dict(orient="records")
+            # head(3) = first 3 rows as list of dicts
+        })
+
+    def load_file(self, file_path: str) -> Optional[pd.DataFrame]:
+        try:
+            if file_path.endswith(".csv"):
+                df = pd.read_csv(file_path)  
+            elif file_path.endswith((".xlsx", ".xls")):
+                df = pd.read_excel(file_path)
+            else:
+                return None
+
+            # Clean column names: strip spaces, lowercase
+            df.columns = [c.strip().lower().replace(" ", "_")
+                          for c in df.columns]
+            return df
+
+        except Exception as e:
+            print(f"Ingestion error: {e}")
+            return None
+============================================================
+FILE: File: `backend/app/agents/structured_agents/trend.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Detects trends in numerical data
+
+import math
+import pandas as pd
+from typing import Dict, Optional
+from langchain_core.messages import HumanMessage
+from app.agents.base import BaseAgent
+from app.utils.schema_detector import detect_schema
+
+
+def safe_float(value, decimals: int = 4) -> Optional[float]:
+    try:
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return round(v, decimals)
+    except (TypeError, ValueError):
+        return None
+
+
+class TrendAgent(BaseAgent):
+
+    def __init__(self):
+        super().__init__("TrendAgent")
+
+    async def run(self, data: pd.DataFrame, context=None) -> Dict:
+        df     = data.copy()
+        schema = detect_schema(df)
+        stats  = {}
+
+        if schema == "transaction_log":
+            stats = self._transaction_trends(df)
+        else:
+            stats = self._numeric_trends(df)
+
+        if not stats:
+            return self._format_result("TrendAgent", {
+                "error": "No numeric data found to analyse trends."
+            })
+
+        prompt = f"""You are a data analyst. Report what these statistics show.
+
+Data type: {schema}
+Statistics:
+{stats}
+
+STRICT RULES:
+- Report only what the numbers directly show. Do not speculate about causes.
+- Every observation must reference a specific number from the stats above.
+- If a metric has only 1 or 2 data points, say "insufficient data for trend".
+- Maximum 3 bullet points. Maximum 100 words total.
+- Do not add recommendations."""
+
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+        return self._format_result("TrendAgent", {
+            "schema_detected": schema,
+            "statistics":      stats,
+            "ai_analysis":     response.content
+        })
+
+    def _transaction_trends(self, df: pd.DataFrame) -> Dict:
+        """For transaction logs: analyse by category and over time."""
+        stats = {}
+
+        # Find key columns
+        revenue_col = next((c for c in df.columns if "revenue" in c.lower() or "sales" in c.lower()), None)
+        cost_col    = next((c for c in df.columns if "cost" in c.lower() or "cogs" in c.lower()), None)
+        mktg_col    = next((c for c in df.columns if "marketing" in c.lower()), None)
+        cat_col     = next((c for c in df.columns if c.lower() in {"category", "type", "description"}), None)
+        date_col    = next((c for c in df.columns if "date" in c.lower()), None)
+
+        # Revenue trend over time (only revenue-generating rows)
+        if revenue_col and date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            revenue_rows = df[pd.to_numeric(df[revenue_col], errors="coerce") > 0].copy()
+            if len(revenue_rows) >= 2:
+                revenue_rows = revenue_rows.sort_values(date_col)
+                rev_series   = pd.to_numeric(revenue_rows[revenue_col], errors="coerce")
+                first = safe_float(rev_series.iloc[0])
+                last  = safe_float(rev_series.iloc[-1])
+                if first and last and first != 0:
+                    stats["revenue_trend"] = {
+                        "first_transaction": first,
+                        "last_transaction":  last,
+                        "change":            safe_float(last - first),
+                        "pct_change":        safe_float((last - first) / first * 100),
+                        "data_points":       len(revenue_rows)
+                    }
+
+        # Category breakdown
+        if cat_col and revenue_col:
+            cat_stats = {}
+            for cat, group in df.groupby(cat_col):
+                rev  = safe_float(pd.to_numeric(group[revenue_col], errors="coerce").sum())
+                cost = safe_float(pd.to_numeric(group[cost_col], errors="coerce").sum()) if cost_col else None
+                cat_stats[str(cat)] = {"total_revenue": rev, "total_cost": cost}
+            stats["by_category"] = cat_stats
+
+        # Marketing spend trend
+        if mktg_col and date_col and len(df) >= 2:
+            mktg_series = pd.to_numeric(df.sort_values(date_col)[mktg_col], errors="coerce").dropna()
+            if len(mktg_series) >= 2:
+                stats["marketing_spend"] = {
+                    "min":   safe_float(mktg_series.min()),
+                    "max":   safe_float(mktg_series.max()),
+                    "total": safe_float(mktg_series.sum()),
+                    "data_points": len(mktg_series)
+                }
+
+        return stats
+
+    def _numeric_trends(self, df: pd.DataFrame) -> Dict:
+        """Fallback for balance sheets and generic numeric data."""
+        stats = {}
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+
+        for col in numeric_cols[:6]:
+            series = df[col].dropna()
+            if len(series) < 2:
+                continue
+            first = safe_float(series.iloc[0])
+            last  = safe_float(series.iloc[-1])
+            pct = (
+                safe_float((last - first) / first * 100)
+                if first is not None and last is not None and first != 0
+                else None
+            )
+
+            stats[col] = {
+                "min":          safe_float(series.min()),
+                "max":          safe_float(series.max()),
+                "mean":         safe_float(series.mean()),
+                "first_value":  first,
+                "last_value":   last,
+                "total_change": safe_float(last - first) if first and last else None,
+                "pct_change":   pct,
+            }
+
+        return stats
+
+============================================================
+FILE: File: `backend/app/agents/structured_agents/anomaly.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Detects unusual values (outliers) in financial data
+# Method: Z-score — values more than 2.5 standard deviations from mean
+#         are flagged as anomalies
+# Example: "Inventory spike in row 47: $450,000 vs average $12,000"
+
+import pandas as pd
+import numpy as np
+from typing import Dict,Any
+from langchain_core.messages import HumanMessage
+from app.agents.base import BaseAgent
+
+class AnomalyAgent(BaseAgent):
+
+    def __init__(self):
+        super().__init__("AnomalyAgent")
+
+    async def run(self, data: pd.DataFrame,context=None) -> Dict:
+        df = data
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        anomalies    = {}
+
+        for col in numeric_cols:
+            series = df[col].dropna()
+            if len(series) < 4:
+                continue   # need enough data for meaningful stats
+
+            mean    = series.mean()
+            std     = series.std()
+
+            if std == 0:
+                continue   # all values same = no anomalies possible
+
+            # Z-score formula: (value - mean) / std_deviation
+            # If |z-score| > 2.5, it's an anomaly (top/bottom 1.2%)
+            z_scores = (series-mean).abs() / std
+            outlier_indices = z_scores[z_scores > 2.5].index.tolist()
+
+            if outlier_indices:
+                anomalies[col] = {
+                    "anomalous_values": series[outlier_indices].tolist(),
+                    "mean":  round(float(mean), 2),
+                    "std":   round(float(std), 2),
+                    "count": len(outlier_indices)
+                }
+
+        if not anomalies:
+            return self._format_result("AnomalyAgent", {
+                "message":   "No significant anomalies detected",
+                "anomalies": {}
+            })
+
+        # Ask GPT-4 to explain what the anomalies mean
+        prompt = f"""You are a financial auditor and risk analyst.
+                        The following anomalies were detected using Z-score analysis (threshold: 2.5 std deviations).
+
+                        Anomalies detected:
+                        {anomalies}
+
+                        For each anomaly:
+                        1. Explain what this unusual value likely means in a business context
+                        2. Assess the risk level (Low/Medium/High)
+                        3. Recommend what action should be investigated
+                        4. Could this be data entry error or a real business event?"""
+
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+        return self._format_result("AnomalyAgent", {
+            "anomalies":   anomalies,
+            "explanation": response.content
+        })
+============================================================
+FILE: File: `backend/app/agents/structured_agents/kpi.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Calculates Key Performance Indicators from financial data
+# IMPROVEMENTS:
+#   - Removes "suggest additional KPIs" instruction that causes hallucination
+#   - Instructs model to skip interpretation for KPIs it didn't calculate
+#   - Hard word limit
+#   - Explicit instruction: do not invent numbers
+import math
+import pandas as pd
+from typing import Dict, Optional, Any
+from langchain_core.messages import HumanMessage
+from app.agents.base import BaseAgent
+from app.utils.schema_detector import detect_schema,get_schema_summary
+from difflib import get_close_matches
+
+def safe_float(value, decimals: int = 2) -> Optional[float]:
+    try:
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return round(v, decimals)
+    except (TypeError, ValueError):
+        return None
+
+class KPIEngine(BaseAgent):
+
+    def __init__(self):
+        super().__init__("KPIEngine")
+
+    def detect_language(self, text: str) -> str:
+        sinhala_chars = any('\u0D80' <= c <= '\u0DFF' for c in text)
+        return "sinhala" if sinhala_chars else "english"
+    
+    def find_column(self, df: pd.DataFrame, possible_names):
+        cols_lower = {c.lower().replace(" ", "_"): c for c in df.columns}#This is called a #!dictionary comprehension
+            #EX- "sales_revenue": "Sales Revenue" (output will be like this key:value)
+        for key, original in cols_lower.items():
+            for name in possible_names:
+                if name in key or key in name:
+                    return pd.to_numeric(df[original], errors="coerce")
+        for name in possible_names:
+            matches = get_close_matches(name, cols_lower.keys(), n=1, cutoff=0.7)
+            if matches:
+                return pd.to_numeric(df[cols_lower[matches[0]]], errors="coerce")
+        return None
+
+    async def run(self, data: pd.DataFrame, context: Optional[str] = None) -> Dict:
+        df         = data.copy()
+        user_input = context or ""
+        language   = self.detect_language(user_input)
+        schema     = detect_schema(df)
+        kpis: Dict[str, Any] = {}
+ 
+        if schema == "transaction_log":
+            kpis = self._calc_transaction_kpis(df)
+        elif schema == "balance_sheet":
+            kpis = self._calc_balance_sheet_kpis(df)
+        else:
+            kpis = self._calc_transaction_kpis(df)
+            if not kpis:
+                kpis = self._calc_balance_sheet_kpis(df)
+ 
+        schema_summary = get_schema_summary(df, schema)
+ 
+        if not kpis:
+            return self._format_result("KPIEngine", {
+                "language_detected": language,
+                "schema_detected":   schema,
+                "calculated_kpis":   {},
+                "interpretation":    (
+                    "Could not calculate KPIs — no recognisable financial columns found. "
+                    f"Columns available: {df.columns.tolist()}"
+                ),
+                "columns_available": df.columns.tolist()
+            })
+ 
+        prompt = f"""You are a financial analyst.
+ 
+Language to respond in: {language}
+Data type: {schema}
+Data overview: {schema_summary}
+ 
+Calculated KPIs:
+{kpis}
+ 
+STRICT RULES:
+- Interpret ONLY the KPIs listed above. Do not invent or suggest additional ones.
+- One sentence per KPI: state whether it is healthy, average, or concerning and why.
+- For transaction logs, note if cost-only rows (zero revenue) affect totals.
+- Do NOT add recommendations or action plans.
+- Maximum 120 words."""
+ 
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+ 
+        return self._format_result("KPIEngine", {
+            "language_detected":  language,
+            "schema_detected":    schema,
+            "calculated_kpis":    kpis,
+            "interpretation":     response.content,
+            "columns_available":  df.columns.tolist()
+        })
+ 
+    def _calc_transaction_kpis(self, df: pd.DataFrame) -> Dict[str, Any]:
+        kpis: Dict[str, Any] = {}
+ 
+        revenue_col = self.find_column(df, ["revenue", "sales", "income"])
+        cost_col    = self.find_column(df, ["cost", "cogs", "expense"])
+        mktg_col    = self.find_column(df, ["marketing", "marketing_spend", "ad_spend"])
+ 
+        if revenue_col is None:
+            return kpis
+ 
+        total_revenue = safe_float(revenue_col.sum())
+        if total_revenue is not None:
+            kpis["total_revenue"] = total_revenue
+ 
+        if cost_col is not None:
+            total_cost = safe_float(cost_col.sum())
+            if total_cost is not None:
+                kpis["total_cost"] = total_cost
+ 
+            # Gross margin only on rows where revenue > 0
+            revenue_mask = revenue_col > 0
+            if revenue_mask.any():
+                rev_rows  = revenue_col[revenue_mask]
+                cost_rows = cost_col[revenue_mask]
+                gm = safe_float(((rev_rows - cost_rows) / rev_rows * 100).mean())
+                if gm is not None:
+                    kpis["gross_margin_pct"] = gm
+ 
+            net_profit = safe_float(revenue_col.sum() - cost_col.sum())
+            if net_profit is not None:
+                kpis["net_profit"] = net_profit
+ 
+        if mktg_col is not None:
+            total_mktg = safe_float(mktg_col.sum())
+            if total_mktg is not None:
+                kpis["total_marketing_spend"] = total_mktg
+ 
+            mktg_mask = (revenue_col > 0) & (mktg_col > 0)
+            if mktg_mask.any():
+                roi = safe_float(
+                    ((revenue_col[mktg_mask] - mktg_col[mktg_mask]) / mktg_col[mktg_mask] * 100).mean()
+                )
+                if roi is not None:
+                    kpis["marketing_roi_pct"] = roi
+ 
+        cat_col = next(
+            (c for c in df.columns if c.lower() in {"category", "type", "description"}),
+            None
+        )
+        if cat_col:
+            breakdown = {}
+            for cat, group in df.groupby(cat_col):
+                rev = safe_float(pd.to_numeric(group[revenue_col.name], errors="coerce").sum())
+                if rev is not None:
+                    breakdown[str(cat)] = rev
+            if breakdown:
+                kpis["revenue_by_category"] = breakdown
+ 
+        return kpis
+ 
+    def _calc_balance_sheet_kpis(self, df: pd.DataFrame) -> Dict[str, Any]:
+        kpis: Dict[str, Any] = {}
+ 
+        def store(key, num, den, pct=False):
+            if num is None or den is None:
+                return
+            val = safe_float((num / den.replace(0, float("nan")) * (100 if pct else 1)).mean())
+            if val is not None:
+                kpis[key] = val
+ 
+        revenue = self.find_column(df, ["revenue", "sales", "income"])
+        cost    = self.find_column(df, ["cost", "cogs", "expense"])
+        net_inc = self.find_column(df, ["net_income", "net_profit", "profit"])
+        curr_a  = self.find_column(df, ["current_asset", "current_assets"])
+        curr_l  = self.find_column(df, ["current_liability", "current_liab"])
+        equity  = self.find_column(df, ["equity", "stockholder", "shareholder_equity"])
+        debt    = self.find_column(df, ["debt", "total_debt", "borrowings"])
+ 
+        if revenue is not None and cost is not None:
+            store("gross_margin_pct", revenue - cost, revenue, pct=True)
+        if net_inc is not None and revenue is not None:
+            store("net_margin_pct", net_inc, revenue, pct=True)
+        if curr_a is not None and curr_l is not None:
+            store("current_ratio", curr_a, curr_l)
+        if net_inc is not None and equity is not None:
+            store("return_on_equity_pct", net_inc, equity, pct=True)
+        if debt is not None and equity is not None:
+            store("debt_to_equity", debt, equity)
+ 
+        return kpis
+ 
+============================================================
+FILE: File: `backend/app/agents/structured_agents/financial.py`
+LANGUAGE: python
+============================================================
+# backend/app/agents/structured_agents/financial.py
+
+import math
+import pandas as pd
+from typing import Dict, Optional
+from langchain_core.messages import HumanMessage
+from app.agents.base import BaseAgent
+from difflib import get_close_matches
+
+
+def safe_float(value, decimals: int = 2) -> Optional[float]:
+    """Return rounded float, or None if value is nan/inf/None."""
+    try:
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return round(v, decimals)
+    except (TypeError, ValueError):
+        return None
+
+
+def safe_series_div(num: pd.Series, den: pd.Series) -> Optional[float]:
+    """
+    Divide two Series element-wise, replace zeros in denominator with NaN,
+    take the mean, then sanitize. Never raises ambiguous truth-value error.
+    """
+    try:
+        result = num / den.replace(0, float("nan"))
+        return safe_float(result.mean())
+    except Exception:
+        return None
+
+
+def safe_sum_div(num: pd.Series, den: pd.Series, scale: float = 100) -> Optional[float]:
+    """sum(num) / sum(den) * scale — for ROA/ROE style calculations."""
+    try:
+        d = float(den.sum())
+        if d == 0:
+            return None
+        return safe_float((float(num.sum()) / d) * scale)
+    except Exception:
+        return None
+
+
+class FinancialAgent(BaseAgent):
+
+    def __init__(self):
+        super().__init__("FinancialAgent")
+
+    def detect_language(self, text: str) -> str:
+        if not text.strip():
+            return "english"
+        sinhala_chars = any('\u0D80' <= c <= '\u0DFF' for c in text)
+        return "sinhala" if sinhala_chars else "english"
+
+    async def run(self, data: pd.DataFrame, context: Optional[str] = None) -> Dict:
+        df         = data.copy()
+        user_input = context or ""
+        language   = self.detect_language(user_input)
+        ratios: Dict[str, float] = {}
+
+        # ── Column finder ─────────────────────────────────────────────
+        def find_column(possible_names):
+            cols_lower = {c.lower().replace(" ", "_"): c for c in df.columns}
+            for key, original in cols_lower.items():
+                for name in possible_names:
+                    if name in key or key in name:
+                        return pd.to_numeric(df[original], errors="coerce")
+            for name in possible_names:
+                matches = get_close_matches(name, cols_lower.keys(), n=1, cutoff=0.7)
+                if matches:
+                    return pd.to_numeric(df[cols_lower[matches[0]]], errors="coerce")
+            return None
+
+        # ── Locate columns ────────────────────────────────────────────
+        curr_a    = find_column(["current_asset", "current_assets"])
+        curr_l    = find_column(["current_liability", "current_liab"])
+        inventory = find_column(["inventory", "inventories"])
+        net_inc   = find_column(["net_income", "net_profit", "profit"])
+        assets    = find_column(["total_asset", "total_assets", "asset"])
+        debt      = find_column(["debt", "total_debt", "borrowings"])
+        equity    = find_column(["equity", "stockholder", "shareholder_equity"])
+        cogs      = find_column(["cost_of_goods", "cogs", "cost"])
+        price     = find_column(["price", "share_price", "market_price"])
+        eps       = find_column(["eps", "earnings_per_share"])
+
+        # ── Calculate ratios — each block is fully independent ────────
+
+        # Current Ratio
+        if curr_a is not None and curr_l is not None:
+            v = safe_series_div(curr_a, curr_l)
+            if v is not None:
+                ratios["current_ratio"] = v
+
+        # Quick Ratio — compute quick_a as a Series BEFORE calling helper
+        if curr_a is not None and inventory is not None and curr_l is not None:
+            quick_a = curr_a - inventory          # Series - Series = Series (safe)
+            v = safe_series_div(quick_a, curr_l)
+            if v is not None:
+                ratios["quick_ratio"] = v
+
+        # Return on Assets
+        if net_inc is not None and assets is not None:
+            v = safe_sum_div(net_inc, assets)
+            if v is not None:
+                ratios["return_on_assets_pct"] = v
+
+        # Return on Equity
+        if net_inc is not None and equity is not None:
+            v = safe_sum_div(net_inc, equity)
+            if v is not None:
+                ratios["return_on_equity_pct"] = v
+
+        # Debt to Equity
+        if debt is not None and equity is not None:
+            v = safe_series_div(debt, equity)
+            if v is not None:
+                ratios["debt_to_equity"] = v
+
+        # Inventory Turnover
+        if cogs is not None and inventory is not None:
+            v = safe_series_div(cogs, inventory)
+            if v is not None:
+                ratios["inventory_turnover"] = v
+
+        # P/E Ratio
+        if price is not None and eps is not None:
+            v = safe_series_div(price, eps)
+            if v is not None:
+                ratios["pe_ratio"] = v
+
+        # ── No ratios calculated ──────────────────────────────────────
+        if not ratios:
+            return self._format_result("FinancialAgent", {
+                "language_detected": language,
+                "ratios":            {},
+                "assessment":        (
+                    "Required financial columns (assets, equity, liabilities, etc.) "
+                    "were not found in the dataset."
+                )
+            })
+
+        # ── Grounded, length-controlled prompt ────────────────────────
+        prompt = f"""You are a financial analyst.
+
+Language to respond in: {language}
+
+Calculated ratios from the uploaded data:
+{ratios}
+
+STRICT RULES:
+- Interpret ONLY the ratios listed above. Do not mention or calculate others.
+- One sentence per ratio explaining whether it looks healthy, average, or concerning.
+- Flag any ratio that looks unusual (very high or very low) and explain why briefly.
+- Do NOT add recommendations or action plans.
+- Do NOT reference industry benchmarks unless you are certain they apply to this data.
+- Maximum 150 words total."""
+
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+        return self._format_result("FinancialAgent", {
+            "language_detected": language,
+            "ratios":            ratios,
+            "assessment":        response.content
+        })
+
+============================================================
+FILE: File: `backend/app/agents/structured_agents/advisor.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Generates strategic recommendations from structured data analysis results
+# IMPROVEMENTS:
+#   - Shorter, tighter prompt — no "CFO briefing document" roleplay that inflates output
+#   - Hard limits on output sections and length
+#   - Instructs the model to omit sections it has no real evidence for
+#   - Prevents hallucinated benchmarks and industry comparisons
+
+# backend/app/agents/structured_agents/advisor.py
+
+from typing import Dict, Any,Optional
+from langchain_core.messages import HumanMessage
+from app.agents.base import BaseAgent
+
+
+class AdvisorAgent(BaseAgent):
+
+    def __init__(self):
+        super().__init__("AdvisorAgent")
+
+    async def run(self, data: Dict[str, Any],context:Optional[str]=None) -> Dict:
+        trend_result    = data.get("trend",    {}).get("result", {})
+        anomaly_result  = data.get("anomaly",  {}).get("result", {})
+        kpi_result      = data.get("kpi",      {}).get("result", {})
+        financial_result= data.get("financial",{}).get("result", {})
+
+        trend_summary    = trend_result.get("ai_analysis",    "").strip()
+        anomaly_summary  = anomaly_result.get("explanation",  "").strip()
+        kpi_summary      = kpi_result.get("interpretation",   "").strip()
+        financial_summary= financial_result.get("assessment", "").strip()
+
+        # Detect schema from KPI result for context
+        schema = kpi_result.get("schema_detected", "unknown")
+        kpis   = kpi_result.get("calculated_kpis", {})
+
+        # Build only sections that have real content
+        sections = []
+        if trend_summary:
+            sections.append(f"TREND ANALYSIS:\n{trend_summary}")
+        if anomaly_summary:
+            sections.append(f"ANOMALY DETECTION:\n{anomaly_summary}")
+        if kpi_summary:
+            sections.append(f"KPI INTERPRETATION:\n{kpi_summary}")
+        if financial_summary:
+            sections.append(f"FINANCIAL RATIOS:\n{financial_summary}")
+
+        if not sections:
+            return self._format_result("AdvisorAgent", {
+                "recommendations": "Insufficient analysis data to generate recommendations."
+            }, confidence=0.3)
+
+        analysis_block = "\n\n".join(sections)
+
+        schema_note = (
+            "Note: The data is a transaction log (not a balance sheet). "
+            "Interpret findings accordingly — revenue and costs are per-transaction."
+            if schema == "transaction_log"
+            else ""
+        )
+
+        prompt = f"""You are a business analyst reviewing findings from multiple analysis agents.
+
+{schema_note}
+
+Analysis findings:
+{analysis_block}
+
+Raw KPIs calculated: {kpis}
+
+STRICT RULES:
+- Base your response ONLY on the findings and KPIs above.
+- Do NOT invent numbers, benchmarks, or trends not present above.
+- Keep total response under 200 words.
+- Use this structure (skip any section you have no real evidence for):
+
+**Key Findings** (2–3 bullets — only what the data clearly shows)
+
+**Priority Actions** (2–3 specific actions directly supported by the findings)
+
+**Risks** (only if anomalies or negative trends were actually detected)"""
+
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+        return self._format_result("AdvisorAgent", {
+            "recommendations": response.content
+        }, confidence=0.85)
+
+============================================================
+FILE: File: `backend/app/utils/sanitize.py
+============================================================
+import math
+from typing import Any
+ 
+ 
+def sanitize(obj: Any) -> Any:
+    """Recursively replace non-JSON-compliant floats with None."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize(v) for v in obj]
+    return obj
+
+============================================================
+FILE: File: `backend/app/utils/schema_detector.py
+============================================================
+# backend/app/utils/schema_detector.py
+# PURPOSE: Detect what kind of data the DataFrame contains so agents
+# can adapt their analysis instead of assuming a balance sheet.
+
+import pandas as pd
+from typing import Literal
+
+DataSchema = Literal["transaction_log", "balance_sheet", "time_series", "unknown"]
+
+
+def detect_schema(df: pd.DataFrame) -> DataSchema:
+    """
+    Inspect column names and data patterns to classify the DataFrame type.
+    Returns one of: 'transaction_log', 'balance_sheet', 'time_series', 'unknown'
+    """
+    cols = [c.lower().replace(" ", "_") for c in df.columns]
+    col_set = set(cols)
+
+    # Transaction log signals
+    transaction_signals = {"category", "transaction_id", "txn", "type", "description"}
+    has_transaction_cols = bool(col_set & transaction_signals)
+
+    # Balance sheet signals
+    balance_sheet_signals = {"total_asset", "equity", "current_liability",
+                             "long_term_debt", "retained_earnings", "stockholder"}
+    has_balance_cols = bool(col_set & balance_sheet_signals)
+
+    # Time series signals
+    has_date = any("date" in c or "month" in c or "period" in c or "year" in c for c in cols)
+    has_revenue = any("revenue" in c or "sales" in c or "income" in c for c in cols)
+
+    if has_transaction_cols and has_revenue:
+        return "transaction_log"
+    if has_balance_cols:
+        return "balance_sheet"
+    if has_date and has_revenue:
+        return "time_series"
+    return "unknown"
+
+
+def get_schema_summary(df: pd.DataFrame, schema: DataSchema) -> str:
+    """Return a plain-text description of the data for use in prompts."""
+    cols = df.columns.tolist()
+    rows = len(df)
+
+    if schema == "transaction_log":
+        # Summarise by category if a category column exists
+        cat_col = next(
+            (c for c in df.columns if c.lower() in {"category", "type", "description"}),
+            None
+        )
+        if cat_col:
+            summary = df.groupby(cat_col).agg(
+                row_count=(df.columns[0], "count")
+            ).reset_index().to_string(index=False)
+            return (
+                f"Transaction log with {rows} rows and columns: {cols}\n"
+                f"Categories present:\n{summary}"
+            )
+
+    return f"DataFrame with {rows} rows and columns: {cols}"
+============================================================
+FILE: File: `backend/app/agents/unstructured_agent/ingestion.py`
+LANGUAGE: python
+============================================================
+
+# Extract = take text out of a file and convert it into plain text (string)
+# PURPOSE: Extracts raw text from PDF, DOCX, and TXT files
+# This gives us the text we then split into chunks
+
+import pdfplumber
+from typing import Optional
+
+class DocumentIngestionAgent:
+
+    def extract(self, file_path: str) -> Optional[str]:
+        # Route to correct extractor based on file type
+        if file_path.endswith(".pdf"):
+            return self.extract_pdf(file_path)
+        elif file_path.endswith(".docx"):
+            return self.extract_docx(file_path)
+        elif file_path.endswith(".txt"):
+            return self.extract_txt(file_path)
+        return None
+
+    def extract_pdf(self, file_path: str) -> Optional[str]:
+        text = ""
+        try:
+            with pdfplumber.open(file_path) as pdf: #Why with? Automatically closes the file after use (safe & clean)
+                for page_num, page in enumerate(pdf.pages):
+                    page_text = page.extract_text()
+                    if page_text:
+                        # Add page marker for reference
+                        text += f"\n[Page {page_num + 1}]\n{page_text}\n"
+            return text.strip()
+        except Exception as e:
+            print(f"PDF extraction error: {e}")
+            return None
+
+    def extract_docx(self, file_path: str) -> Optional[str]:
+        from docx import Document
+        try:
+            doc   = Document(file_path)
+            # Each paragraph in the DOCX is a separate object
+            lines = [para.text for para in doc.paragraphs if para.text.strip()]
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"DOCX extraction error: {e}")
+            return None
+
+    def extract_txt(self, file_path: str) -> Optional[str]:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except Exception as e:
+            print(f"TXT read error: {e}")
+            return None
+
+# PyPDFLoader → Understanding
+    # PDF → Text → Chunks → Embeddings → AI answers questions
+
+    # 👉 Used for:
+
+        # Chatbots
+        # Q&A systems
+        # semantic search
+
+
+# 📊 pdfplumber → Analysis
+    # PDF → Text → Extract numbers → DataFrame → Trend analysis
+
+    # 👉 Used for:
+
+        # financial insights
+        # calculations
+        # structured analysis
+
+============================================================
+FILE: File: `backend/app/agents/unstructured_agent/chunking.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Splits large text into overlapping chunks
+# Why overlap? So that information near chunk boundaries isn't lost
+# Example: chunk_size=500, overlap=50
+#   Chunk 1: chars 0-500
+#   Chunk 2: chars 450-950   (50-char overlap keeps context)
+#   Chunk 3: chars 900-1400
+
+from typing import List
+
+class ChunkingAgent:
+
+    def __init__(self, chunk_size: int = 500, overlap: int = 50):
+        self.chunk_size = chunk_size
+        self.overlap    = overlap
+
+    def chunk(self, text: str) -> List[str]:
+        if not text:
+            return []
+
+        chunks = []
+        start  = 0
+
+        while start < len(text):
+            end = start + self.chunk_size
+
+            # Try to end at a sentence boundary (. ! ?) for cleaner chunks
+            if end < len(text):
+                for punct in [".", "!", "?"]:
+                    last_punct = text.rfind(punct, start, end)
+                    if last_punct != -1:
+                        end = last_punct + 1
+                        break
+
+            chunk = text[start:end].strip()
+            if len(chunk) > 50:   # ignore tiny fragments
+                chunks.append(chunk)
+
+            start = end - self.overlap  # back up by overlap amount
+
+        return chunks
+
+    def chunk_with_metadata(self, text: str, document_id: int) -> List[dict]:
+        # Returns chunks WITH their metadata for Pinecone
+        chunks = self.chunk(text)
+        return [
+            {
+                "id":          f"doc{document_id}_chunk{i}",
+                "text":        chunk,
+                "doc_id":      document_id,
+                "chunk_index": i,
+                "char_count":  len(chunk)
+            }
+            for i, chunk in enumerate(chunks)
+        ]
+============================================================
+FILE: File: `backend/app/agents/unstructured_agent/embedding.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Converts text chunks into vectors and stores them in Pinecone
+#
+# What is a vector?
+# A text like "quarterly revenue grew 15%" becomes a list of 1536 floats
+# like [0.023, -0.451, 0.891, ...] that represents its MEANING mathematically
+#
+# Similar meanings → similar vectors → can be searched by similarity
+
+from pinecone import Pinecone, ServerlessSpec
+from openai import OpenAI
+from typing import List, Dict
+from app.config import settings
+
+class EmbeddingAgent:
+
+    def __init__(self):
+        self.openai = OpenAI(api_key=settings.OPENAI_API_KEY.get_secret_value())
+
+        pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+
+        existing = [idx.name for idx in pc.list_indexes()]
+        if settings.PINECONE_INDEX_NAME not in existing:
+            pc.create_index(
+                name=settings.PINECONE_INDEX_NAME,
+                dimension=settings.PINECONE_DIMENSION,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-east-1")
+            )
+
+        self.index = pc.Index(settings.PINECONE_INDEX_NAME)
+
+    def embed_text(self, text: str) -> List[float]:
+        response = self.openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=text
+        )
+        return response.data[0].embedding
+
+    def upsert_chunks(self, chunks: List[Dict]) -> int:
+        if not chunks:
+            return 0
+
+        vectors = []  # this will hold the final data we send to Pinecone (Volatile temporary memory)
+        for chunk in chunks:
+            embedding = self.embed_text(chunk["text"])
+            vectors.append({
+                "id":     chunk["id"],
+                "values": embedding,
+                "metadata": {
+
+                    "doc_id":      chunk["doc_id"],
+                    "document_id": chunk["doc_id"],   # kept for compatibility
+                    "chunk_index": chunk["chunk_index"],
+                    "text":        chunk["text"][:1000]
+                }
+            })
+
+        batch_size = 100
+        for i in range(0, len(vectors), batch_size):
+            batch = vectors[i:i + batch_size]
+            self.index.upsert(vectors=batch)
+
+        return len(vectors)
+    
+    # id	Unique ID of SINGLE chunk/vector
+    # doc_id	ID of WHOLE document
+
+
+    #!why we use batch_size?
+# Batch size controls how many vectors are sent to Pinecone in ONE request.
+# Instead of uploading vectors one-by-one (slow and many API calls),
+# we upload them in groups for better performance and efficiency.
+#
+# Example:
+# If total vectors = 250 and batch_size = 100
+#
+# Batch 1 -> vectors[0:100]
+# Batch 2 -> vectors[100:200]
+# Batch 3 -> vectors[200:250]
+#
+# This approach reduces:
+# - network overhead
+# - API requests
+# - upload time
+
+
+============================================================
+FILE: File: `backend/app/agents/unstructured_agent/retrieval.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Semantic search — finds the most relevant chunks for a question
+# How it works:
+# 1. Embed the user's question into a vector
+# 2. Search Pinecone for the closest matching vectors
+# 3. Return the text content of those chunks
+
+from urllib import response
+
+from pinecone import Pinecone
+from openai import OpenAI
+from typing import List, Dict, Optional
+from app.config import settings
+
+class RetrievalAgent:
+
+    def __init__(self):
+        self.openai = OpenAI(api_key=settings.OPENAI_API_KEY.get_secret_value())
+        pc          = Pinecone(api_key=settings.PINECONE_API_KEY)
+        self.index  = pc.Index(settings.PINECONE_INDEX_NAME)
+
+    def retrieve(self, query: str, top_k: int = 5,doc_id: Optional[int] = None) -> List[Dict]:
+
+        # Step 1: Embed the query the SAME WAY we embedded documents
+        # (must use same model so the vector spaces match)
+        response = self.openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=query
+        )
+        query_vector = response.data[0].embedding  #! Convert user query into a vector (list of numbers). The API returns the result inside a list, so we take the first item [0] and extract its embedding.
+
+        # Step 2: Build optional filter to search within one document
+        filter_dict = ({"doc_id": {"$eq": doc_id}} if doc_id is not None else None)        # $eq = equals
+
+        # Step 3: Search Pinecone
+        results = self.index.query(
+            vector=query_vector,
+            top_k=top_k,          # return top 5 closest chunks
+            include_metadata=True, # include the text content
+            filter=filter_dict #type: ignore
+        )
+        matches = results.matches or []
+
+        print(f"🔍 Query: {query}")
+        print(f"📊 doc_id filter: {doc_id} | Total matches: {len(matches)}")
+
+        for m in matches:
+            print("Score:", m.score)
+        # Step 4: Return chunks sorted by relevance score
+        return [
+            {
+                "text":         match.metadata.get("text", ""),
+                "score":        round(match.score, 3),
+                # score = cosine similarity (0 to 1, higher = more relevant)
+                "document_id":       match.metadata.get("document_id"),
+                "chunk_index":  match.metadata.get("chunk_index"),
+                "pinecone_id":  match.id
+            }
+            # Pinecone internally builds a response like this:
+
+            #         {
+            #             "matches": [
+            #                       {...},{...}
+            #                       ],
+            #             "namespace": "",
+            #             "usage": {...}
+            #         }
+            
+            for match in matches
+            if match.score > 0.3 
+        ]
+
+============================================================
+FILE: File: `backend/app/agents/unstructured_agent/summary.py`
+LANGUAGE: python
+============================================================
+
+# PURPOSE: Answers user questions using retrieved document chunks
+# IMPROVEMENTS:
+#   - Strict instruction to never go beyond what the chunks contain
+#   - Hard word limit to prevent bloated answers
+#   - Explicit fallback when chunks don't answer the question
+#   - No speculative or background "context" additions
+
+from typing import List, Dict,Optional
+from langchain_core.messages import HumanMessage, SystemMessage
+from app.agents.base import BaseAgent
+
+
+class SummaryAgent(BaseAgent):
+
+    def __init__(self):
+        super().__init__("SummaryAgent")
+
+    def detect_language(self, text: str) -> str:
+        sinhala_chars = any('\u0D80' <= c <= '\u0DFF' for c in text)
+
+        if sinhala_chars:
+            return "sinhala"
+        return "english"
+
+    async def run(self, data: Dict,context:Optional[str]=None) -> Dict:
+        query  = data.get("query", "")
+        chunks = data.get("chunks", [])
+        user_input = context or ""
+        language = self.detect_language(user_input)
+
+        if not chunks:
+            return self._format_result("SummaryAgent", {
+                "answer":  "No relevant information was found in the uploaded documents for that question.",
+                "sources": []
+            }, confidence=0.0)
+
+        # Only use top-3 most relevant chunks to avoid noise
+        top_chunks = sorted(chunks, key=lambda c: c.get("score", 0), reverse=True)[:3]
+
+        context_text = "\n\n---\n\n".join(
+            f"[Chunk {i+1} | relevance: {c['score']}]\n{c['text']}"
+            for i, c in enumerate(top_chunks)
+        )
+
+        system_msg = SystemMessage(content="""You are a precise document assistant.
+
+STRICT RULES — follow every one without exception:
+1. Answer ONLY from the document chunks provided. Do not add background knowledge.
+2. If the chunks do not contain enough information to answer, say exactly:
+   "The documents don't contain enough information to answer this question."
+3. Be concise. Maximum 150 words unless the question explicitly asks for a list or table.
+4. Never pad the answer with phrases like "Based on the provided context..." or "In conclusion...".
+5. Never speculate or infer beyond what is explicitly stated in the chunks.
+6. If quoting, keep quotes under 20 words.""")
+
+        user_msg = HumanMessage(content=f"""DOCUMENT CHUNKS:
+{context_text}
+
+QUESTION: {query}
+
+Answer concisely and only from the chunks above.""")
+
+        response = await self.llm.ainvoke([system_msg, user_msg])
+
+        return self._format_result("SummaryAgent", {
+            "answer":        response.content,
+            "chunks_used":   len(top_chunks),
+            "top_relevance": top_chunks[0]["score"] if top_chunks else 0,
+            "sources":       [
+                {"doc_id": c.get("document_id"), "score": c["score"]}
+                for c in top_chunks
+            ]
+        })
+
+============================================================
+FILE: File: `backend/app/services/document_service.py`
+LANGUAGE: python
+============================================================
+# PURPOSE: Orchestrates the full document processing pipeline
+# When a PDF is uploaded, this service runs all the agent steps
+
+from sqlalchemy.orm import Session
+from app.models.document import Document
+from app.agents.unstructured_agent.ingestion import DocumentIngestionAgent
+from app.agents.unstructured_agent.chunking import ChunkingAgent
+from app.agents.unstructured_agent.embedding import EmbeddingAgent
+
+class DocumentService:
+
+    def __init__(self):
+        self.ingestion = DocumentIngestionAgent()
+        self.chunker   = ChunkingAgent(chunk_size=500, overlap=50)
+        self.embedder  = EmbeddingAgent()
+
+    def process_document(self, doc_id: int, file_path: str, db: Session) -> dict:
+        # Step 1: Extract text
+        text = self.ingestion.extract(file_path)
+        if not text:
+            return {"success": False, "error": "Could not extract text"}
+
+        # Step 2: Update document record with raw text
+        doc          = db.query(Document).filter(Document.id == doc_id).first()
+        if not doc:
+            return {"success": False, "error": "Document not found"}
+
+        doc.raw_text = text
+        db.commit()
+
+        # Step 3: Chunk the text
+        chunks = self.chunker.chunk_with_metadata(text, doc_id)
+
+        # Step 4: Embed and store in Pinecone
+        try:
+            count = self.embedder.upsert_chunks(chunks)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Embedding failed: {str(e)}"
+            }
+        # Step 5: Mark as indexed
+        if count > 0:
+            doc.is_indexed = 1
+            doc.page_count = text.count("[Page ")
+            db.commit()
+        # this page_count method ("[page") used for measure the page count of the document(after extract text)
+        db.commit()
+
+        print(f"✅ Document {doc_id} processed: {count} chunks stored")
+
+        return {
+            "success":      True,
+            "chunks_stored": count,
+            "text_length":  len(text)
+        }
+============================================================
+FILE: File: `backend/app/agents/query_processors/classifier.py`
+LANGUAGE: python
+============================================================
+from typing import Any, Dict, Optional
+from langchain_core.messages import HumanMessage
+from app.agents.base import BaseAgent
+
+class ClassifierAgent(BaseAgent):
+
+    def __init__(self):
+        super().__init__("ClassifierAgent")
+
+    async def classify(self, query: str) -> str:
+        # NOTE: This only runs when system_route is None
+        # (user asked a question without selecting any file)
+        prompt = f"""You are a query router for a data analysis system.
+Classify this query into EXACTLY ONE category:
+
+- structured   → numbers, revenue, profit, KPIs, trends, calculations, Excel, CSV, data analysis
+- unstructured → documents, PDFs, text content, summaries, contracts, policies, "what does it say"
+- hybrid       → needs BOTH data analysis AND document content together
+
+Query: "{query}"
+
+Reply with ONLY one word: structured OR unstructured OR hybrid"""
+
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        result   = response.content.strip().lower().split()[0]
+        # .split()[0] takes first word only — prevents "structured data" causing KeyError
+
+        valid = {"structured", "unstructured", "hybrid"}
+        # ✅ FIX: fallback was "financial" which is NOT a valid graph route
+        # Must be "structured" so graph can route to "trend" node
+        return result if result in valid else "structured"
+
+    async def run(self, data: Any, context: Optional[str] = None) -> Dict:
+        query      = data if isinstance(data, str) else data.get("query", "")
+        query_type = await self.classify(query)
+        return self._format_result(self.name, {"query_type": query_type})
+
+============================================================
+FILE: File: `backend/app/agents/orchestrator.py`
+LANGUAGE: python
+============================================================
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Optional, Any, Dict
+
+from app.agents.query_processors.classifier import ClassifierAgent
+from app.agents.structured_agents.trend import TrendAgent
+from app.agents.structured_agents.anomaly import AnomalyAgent
+from app.agents.structured_agents.kpi import KPIEngine
+from app.agents.structured_agents.financial import FinancialAgent
+from app.agents.structured_agents.advisor import AdvisorAgent
+from app.agents.unstructured_agent.retrieval import RetrievalAgent
+from app.agents.unstructured_agent.summary import SummaryAgent
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from app.config import settings
+
+# ── State ──────────────────────────────────────────────────────────
+class AgentState(TypedDict):
+    query:        str
+    query_type:   Optional[str]
+    df:           Optional[Any]
+    document_id:  Optional[int]
+    results:      Dict
+    final_answer: Optional[str]
+    error:        Optional[str]
+    start_time:   Optional[float]
+    system_route: Optional[str]
+    # ✅ NEW: "structured" | "unstructured" | "hybrid" | None
+
+
+# ── Nodes ──────────────────────────────────────────────────────────
+
+async def classify_node(state: AgentState) -> AgentState:
+    # Only actually calls GPT when system_route is None
+    # When system_route is set, this is a no-op pass-through
+    if state.get("system_route") is not None:
+        # System already decided — skip classifier entirely
+        print(f"⏭️  classify_node skipped — system_route={state['system_route']}")
+        return state
+
+    classifier          = ClassifierAgent()
+    query_type          = await classifier.classify(state["query"])
+    state["query_type"] = query_type
+    state["system_route"] = query_type   # sync so router sees it
+    print(f"🤖 Classifier decided: {query_type}")
+    return state
+
+
+async def trend_node(state: AgentState) -> AgentState:
+    if state["df"] is None:
+        state["results"]["trend"] = {"error": "No structured data loaded"}
+        return state
+    result = await TrendAgent().run(state["df"])
+    state["results"]["trend"] = result
+    return state
+
+
+async def anomaly_node(state: AgentState) -> AgentState:
+    if state["df"] is None:
+        return state
+    result = await AnomalyAgent().run(state["df"])
+    state["results"]["anomaly"] = result
+    return state
+
+
+async def kpi_node(state: AgentState) -> AgentState:
+    if state["df"] is None:
+        return state
+    result = await KPIEngine().run(state["df"])
+    state["results"]["kpi"] = result
+    return state
+
+
+async def financial_node(state: AgentState) -> AgentState:
+    if state["df"] is None:
+        state["final_answer"] = "No structured data provided."
+        return state
+    result = await FinancialAgent().run(state["df"])
+    state["results"]["financial"] = result
+    return state
+
+
+async def advisor_node(state: AgentState) -> AgentState:
+    result = await AdvisorAgent().run(state["results"])
+    state["results"]["advisory"] = result
+    state["final_answer"]        = result["result"]["recommendations"]
+    return state
+
+
+async def retrieval_node(state: AgentState) -> AgentState:
+    if not state.get("document_id"):
+        state["results"]["retrieved_chunks"] = []
+        state["final_answer"] = "No document selected. Please select a document first."
+        return state
+
+    # ✅ FIX: parameter is doc_id (not document_id)
+    # RetrievalAgent.retrieve() signature: retrieve(query, top_k, doc_id)
+    chunks = RetrievalAgent().retrieve(
+        state["query"], top_k=5, doc_id=state["document_id"]
+    )
+    state["results"]["retrieved_chunks"] = chunks
+    return state
+
+
+async def summary_node(state: AgentState) -> AgentState:
+    result = await SummaryAgent().run({
+        "query":  state["query"],
+        "chunks": state["results"].get("retrieved_chunks", [])
+    })
+    state["results"]["summary"] = result
+    state["final_answer"]       = result["result"]["answer"]
+    return state
+
+
+async def hybrid_advisor_node(state: AgentState) -> AgentState:
+ 
+    llm = ChatOpenAI(
+        model=settings.OPENAI_MODEL,
+        temperature=0.1,          
+        api_key=settings.OPENAI_API_KEY.get_secret_value()  # type: ignore
+    )
+ 
+    # Pull what each pipeline actually produced
+    financial_answer = (
+        state["results"]
+        .get("advisory", {})
+        .get("result", {})
+        .get("recommendations", "")
+        .strip()
+    )
+
+                        #     state = {
+                        #     "results": {
+                        #         "advisory": {
+                        #             "result": {
+                        #                 "recommendations":
+                        #                 "Revenue dropped by 10%"
+                        #             }
+                        #         }
+                        #     }
+                        # }
+    doc_answer = (
+        state["results"]
+        .get("summary", {})
+        .get("result", {})
+        .get("answer", "")
+        .strip()
+    )
+ 
+    failure_phrases = [
+    "insufficient information",
+    "no relevant information",
+    "unable to answer",
+    "not enough information",
+    "data not available"
+]
+
+    no_financial = (
+        not financial_answer or
+        any(p in financial_answer.lower() for p in failure_phrases)
+    )
+
+    no_doc = (
+        not doc_answer or
+        any(p in doc_answer.lower() for p in failure_phrases)
+    )
+ 
+    if no_financial and no_doc:
+        state["final_answer"] = (
+            "Neither the structured data nor the documents contained enough "
+            "information to answer that question."
+        )
+        state["results"]["hybrid_synthesis"] = state["final_answer"]
+        return state
+ 
+    if no_financial:
+        state["final_answer"] = doc_answer
+        state["results"]["hybrid_synthesis"] = doc_answer
+        return state
+ 
+    if no_doc:
+        state["final_answer"] = financial_answer
+        state["results"]["hybrid_synthesis"] = financial_answer
+        return state
+ 
+    # Both sides have real content — combine them concisely
+    system_msg = SystemMessage(content="""You are a concise analyst.
+Your job is to merge two answers into ONE clear, unified response.
+ 
+STRICT RULES:
+1. Use ONLY the information from the two answers provided. Do not add outside knowledge.
+2. Do not repeat the same point twice.
+3. Keep the final answer under 200 words.
+4. If the two answers contradict each other, say so clearly — do not smooth it over.
+5. Never invent numbers, names, or conclusions not present in the inputs.
+6. Do not add a preamble like "Based on both sources..." — go straight to the answer.""")
+ 
+    user_msg = HumanMessage(content=f"""DATA ANALYSIS ANSWER:
+{financial_answer}
+ 
+DOCUMENT ANSWER:
+{doc_answer}
+ 
+USER QUESTION: {state["query"]}
+ 
+Merge these two answers into one concise response. Clearly label insights that come from
+the data vs the document only when it adds clarity.""")
+ 
+    response = await llm.ainvoke([system_msg, user_msg])
+ 
+    state["results"]["hybrid_synthesis"] = response.content
+    state["final_answer"] = response.content  # type: ignore
+    return state
+
+# ── Router ─────────────────────────────────────────────────────────
+def route_after_classify(state: AgentState) -> str:
+    system_route = state.get("system_route")
+
+    print(f"🔀 Router: system_route={system_route}")
+
+    if system_route == "structured":
+        return "trend"
+    if system_route == "unstructured":
+        return "retrieval"
+    if system_route == "hybrid":
+        return "hybrid_start"   # ✅ NEW hybrid entry point
+
+    # Absolute fallback — should rarely reach here
+    if state.get("df") is not None:
+        return "trend"
+    if state.get("document_id"):
+        return "retrieval"
+    return "trend"
+
+
+# ── Graph ──────────────────────────────────────────────────────────
+def build_agent_graph():
+    graph = StateGraph(AgentState)
+
+    # Register all nodes
+    graph.add_node("classify",       classify_node)
+    graph.add_node("trend",          trend_node)
+    graph.add_node("anomaly",        anomaly_node)
+    graph.add_node("kpi",            kpi_node)
+    graph.add_node("financial",      financial_node)
+    graph.add_node("advisor",        advisor_node)
+    graph.add_node("retrieval",      retrieval_node)
+    graph.add_node("summary",        summary_node)
+    # ✅ NEW: hybrid nodes
+    graph.add_node("hybrid_trend",         trend_node)
+    graph.add_node("hybrid_anomaly",       anomaly_node)
+    graph.add_node("hybrid_kpi",           kpi_node)
+    graph.add_node("hybrid_financial",     financial_node)
+    graph.add_node("hybrid_advisor",       advisor_node)
+    graph.add_node("hybrid_retrieval",     retrieval_node)
+    graph.add_node("hybrid_summary",       summary_node)
+    graph.add_node("hybrid_final",         hybrid_advisor_node)
+
+    graph.set_entry_point("classify")
+
+    # Routing after classify
+    graph.add_conditional_edges(
+        "classify",
+        route_after_classify,
+        {
+            "trend":        "trend",
+            "retrieval":    "retrieval",
+            "hybrid_start": "hybrid_trend",   # ✅ hybrid starts financial first
+        }
+    )
+
+    # ── Structured pipeline ────────────────────────────────────────
+    graph.add_edge("trend",     "anomaly")
+    graph.add_edge("anomaly",   "kpi")
+    graph.add_edge("kpi",       "financial")
+    graph.add_edge("financial", "advisor")
+    graph.add_edge("advisor",   END)
+
+    # ── Unstructured pipeline ──────────────────────────────────────
+    graph.add_edge("retrieval", "summary")
+    graph.add_edge("summary",   END)
+
+    # ── Hybrid pipeline: runs BOTH then combines ───────────────────
+    graph.add_edge("hybrid_trend",     "hybrid_anomaly")
+    graph.add_edge("hybrid_anomaly",   "hybrid_kpi")
+    graph.add_edge("hybrid_kpi",       "hybrid_financial")
+    graph.add_edge("hybrid_financial", "hybrid_advisor")
+    graph.add_edge("hybrid_advisor",   "hybrid_retrieval")   # then RAG
+    graph.add_edge("hybrid_retrieval", "hybrid_summary")
+    graph.add_edge("hybrid_summary",   "hybrid_final")       # combine both
+    graph.add_edge("hybrid_final",     END)
+
+    return graph.compile()
+
+
+agent_graph = build_agent_graph()
+============================================================
+FILE: File: `backend/app/routers/query.py`
+LANGUAGE: python
+============================================================
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+import time
+
+from app.database import get_db
+from app.schemas.query import QueryRequest
+from app.models.query import Query
+from app.models.data_source import DataSource
+from app.models.document import Document
+from app.agents.orchestrator import agent_graph, AgentState
+from app.agents.structured_agents.ingestion import StructuredIngestionAgent
+from app.utils.sanitize import sanitize
+
+router = APIRouter(prefix="/query", tags=["Query"])
+
+
+@router.post("/")
+async def process_query(request: QueryRequest, db: Session = Depends(get_db)):
+    start        = time.time()
+    df           = None
+    doc_id       = None
+    system_route = None
+
+    has_structured = request.data_source_id is not None
+    has_document   = request.document_id is not None
+
+    # ── Case 1: HYBRID — user selected BOTH a file AND a document ──
+    if has_structured and has_document:
+        # Load structured file
+        source = db.query(DataSource).filter(
+            DataSource.id == request.data_source_id
+        ).first()
+        if not source:
+            raise HTTPException(404, f"Data source {request.data_source_id} not found")
+
+        loader = StructuredIngestionAgent()
+        df     = loader.load_file(str(source.file_path))
+        if df is None:
+            raise HTTPException(400, f"Could not read file: {source.file_path}")
+
+        # Validate document
+        doc = db.query(Document).filter(
+            Document.id == request.document_id
+        ).first()
+        if not doc:
+            raise HTTPException(404, f"Document {request.document_id} not found")
+        if doc.is_indexed == 0:
+            raise HTTPException(400, "Document is still processing. Please wait.")
+
+        doc_id       = request.document_id
+        system_route = "hybrid"
+        print(f"🔀 System route: HYBRID | file={source.name} | doc={doc.filename}")
+
+    # ── Case 2: STRUCTURED only ────────────────────────────────────
+    elif has_structured:
+        source = db.query(DataSource).filter(
+            DataSource.id == request.data_source_id
+        ).first()
+        if not source:
+            raise HTTPException(404, f"Data source {request.data_source_id} not found")
+
+        loader = StructuredIngestionAgent()
+        df     = loader.load_file(str(source.file_path))
+        if df is None:
+            raise HTTPException(400, f"Could not read file: {source.file_path}")
+
+        system_route = "structured"
+        print(f"📊 System route: STRUCTURED | file={source.name} | rows={len(df)}")
+
+    # ── Case 3: UNSTRUCTURED only ──────────────────────────────────
+    elif has_document:
+        doc = db.query(Document).filter(
+            Document.id == request.document_id
+        ).first()
+        if not doc:
+            raise HTTPException(404, f"Document {request.document_id} not found")
+        if doc.is_indexed == 0:
+            raise HTTPException(
+                400,
+                f"Document '{doc.filename}' is still being processed. "
+                "Please wait a moment and try again."
+            )
+        if doc.is_indexed == 2:
+            raise HTTPException(
+                400,
+                f"Document '{doc.filename}' failed to process. "
+                "Please re-upload the file."
+            )
+
+        doc_id       = request.document_id
+        system_route = "unstructured"
+        print(f"📄 System route: UNSTRUCTURED | doc={doc.filename}")
+
+    # ── Case 4: No file selected — classifier decides ──────────────
+    else:
+        system_route = None
+        print("⚠️  No file selected — classifier will decide")
+
+    # ── Build state ────────────────────────────────────────────────
+    initial_state: AgentState = {
+        "query":        request.query,
+        "query_type":   None,
+        "df":           df,
+        "document_id":  doc_id,
+        "results":      {},
+        "final_answer": None,
+        "error":        None,
+        "start_time":   start,
+        "system_route": system_route,   # type: ignore
+    }
+
+    # ── Run agent graph ────────────────────────────────────────────
+    try:
+        final_state = await agent_graph.ainvoke(initial_state)
+    except Exception as e:
+        print("❌ AGENT GRAPH ERROR:", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    exec_time   = int((time.time() - start) * 1000)
+    ROUTE_TO_QUERY_TYPE = {
+    "structured":   "financial",    # structured file → financial query type
+    "unstructured": "document",     # document file   → document query type  
+    "hybrid":       "hybrid",       # both            → hybrid query type
+    None:           None
+}
+
+
+    clean_results = sanitize(final_state["results"])  
+    final_answer  = final_state.get("final_answer") or ""
+
+    # ── Save to DB ─────────────────────────────────────────────────
+    query_record = Query(
+        user_query   = request.query,
+        query_type   = ROUTE_TO_QUERY_TYPE.get(system_route),
+        response     = final_answer,
+        sources_used = ",".join(final_state["results"].keys()),
+        confidence   = 0.9,
+        exec_time_ms = exec_time
+    )
+    db.add(query_record)
+    db.commit()
+    db.refresh(query_record)
+
+    return {
+        "id":           query_record.id,
+        "query":        request.query,
+        "route_used":   system_route,
+        "query_type":   final_state.get("query_type") or system_route,
+        "answer":       final_answer,
+        "results":      clean_results,
+        "exec_time_ms": exec_time
+    }
+
+============================================================
+FILE: File: `backend/app/routers/query.py`
+LANGUAGE: python
+============================================================
+# Add to main.py:
+from app.routers import upload, query   # add query
+
+app.include_router(upload.router)
+app.include_router(query.router)       # add this line
+
+

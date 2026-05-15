@@ -1,0 +1,2520 @@
+app.jsx
+// // App.jsx — root: manages global state and phase transitions
+// import { useState, useEffect, useRef } from "react";
+// import GlobalStyles  from "./components/GlobalStyles";
+// import Topbar        from "./components/Topbar";
+// import UploadPage    from "./components/UploadPage";
+// import ChatInterface from "./components/ChatInterface";
+// import { sendQuery, getDocumentStatus } from "./services/api";
+
+// export default function App() {
+//   // phase: "upload" → "processing" → "chat"
+//   const [phase, setPhase]         = useState("upload");
+//   const [sources, setSources]     = useState([]);
+//   const [activeIds, setActiveIds] = useState([]);
+//   const [messages, setMessages]   = useState([]);
+//   const [input, setInput]         = useState("");
+//   const [thinking, setThinking]   = useState(false);
+
+//   // ── Processing state ──────────────────────────────────────────────
+//   const [processingStatus, setProcessingStatus] = useState(""); // message shown on screen
+//   const pollRef = useRef(null);  // holds the interval so we can clear it
+
+//   // ── Go to processing phase ────────────────────────────────────────
+//   const handleStartChat = () => {
+//     setMessages([]);
+
+//     // Check if any active source is a document that might still be processing
+//     const activeSources = sources.filter((s) => activeIds.includes(s.id) && s.serverId);
+//     const docSources    = activeSources.filter((s) => s.type === "document");
+
+//     if (docSources.length === 0) {
+//       // No documents — structured/sheets/db are ready immediately
+//       setPhase("chat");
+//       return;
+//     }
+
+//     // Has documents — enter processing phase and poll
+//     setPhase("processing");
+//     setProcessingStatus("Extracting text from your document…");
+
+//     let attempt = 0;
+//     const steps = [
+//       "Extracting text from your document…",
+//       "Splitting into chunks…",
+//       "Generating embeddings…",
+//       "Storing in vector database…",
+//       "Almost ready…",
+//     ];
+
+//     pollRef.current = setInterval(async () => {
+//       attempt++;
+
+//       // Cycle through the status messages to give visual feedback
+//       setProcessingStatus(steps[Math.min(attempt - 1, steps.length - 1)]);
+
+//       try {
+//         // Poll all document sources — all must be ready (is_indexed === 1)
+//         const statuses = await Promise.all(
+//           docSources.map((s) => getDocumentStatus(s.serverId))
+//         );
+
+//         const allReady  = statuses.every((st) => st === 1);
+//         const anyFailed = statuses.some((st) => st === 2);
+
+//         if (anyFailed) {
+//           clearInterval(pollRef.current);
+//           setProcessingStatus("❌ Document processing failed. Please re-upload.");
+//           // Stay on processing screen so user sees the error — don't go to chat
+//           return;
+//         }
+
+//         if (allReady) {
+//           clearInterval(pollRef.current);
+//           setPhase("chat");
+//         }
+//       } catch {
+//         // Network hiccup — just keep polling, don't crash
+//       }
+//     }, 2500); // poll every 2.5 seconds
+//   };
+
+//   // Clean up interval if user navigates back
+//   const handleBack = () => {
+//     if (pollRef.current) clearInterval(pollRef.current);
+//     setPhase("upload");
+//   };
+
+//   // Safety: clear interval on unmount
+//   useEffect(() => () => clearInterval(pollRef.current), []);
+
+//   // ── Send a chat message ───────────────────────────────────────────
+//   const handleSend = async () => {
+//     if (!input.trim() || thinking) return;
+//     const text = input.trim();
+//     setInput("");
+//     setMessages((prev) => [...prev, { role: "user", text }]);
+//     setThinking(true);
+
+//     const activeSources = sources.filter((s) => activeIds.includes(s.id) && s.serverId);
+//     const structuredSrc = activeSources.find((s) =>
+//       ["structured", "sheets", "database"].includes(s.type)
+//     );
+//     const docSrc = activeSources.find((s) => s.type === "document");
+
+//     try {
+//       const res = await sendQuery({
+//         query:          text,
+//         data_source_id: structuredSrc?.serverId ?? null,
+//         document_id:    docSrc?.serverId        ?? null,
+//       });
+//       setMessages((prev) => [
+//         ...prev,
+//         { role: "assistant", text: res.data.answer, ms: res.data.exec_time_ms },
+//       ]);
+//     } catch {
+//       setMessages((prev) => [
+//         ...prev,
+//         { role: "assistant", text: "Something went wrong. Please try again.", error: true },
+//       ]);
+//     } finally {
+//       setThinking(false);
+//     }
+//   };
+
+//   return (
+//     <div style={rootStyle}>
+//       <GlobalStyles />
+
+//       <div style={orbLayer} aria-hidden>
+//         <div style={{ ...orb, ...orb1 }} />
+//         <div style={{ ...orb, ...orb2 }} />
+//         <div style={{ ...orb, ...orb3 }} />
+//       </div>
+
+//       <Topbar phase={phase} onBack={handleBack} />
+
+//       {phase === "upload" && (
+//         <UploadPage
+//           sources={sources}
+//           setSources={setSources}
+//           activeIds={activeIds}
+//           setActiveIds={setActiveIds}
+//           onStartChat={handleStartChat}
+//         />
+//       )}
+
+//       {phase === "processing" && (
+//         <ProcessingScreen status={processingStatus} onCancel={handleBack} />
+//       )}
+
+//       {phase === "chat" && (
+//         <ChatInterface
+//           sources={sources}
+//           activeIds={activeIds}
+//           messages={messages}
+//           input={input}
+//           thinking={thinking}
+//           onInput={setInput}
+//           onSend={handleSend}
+//         />
+//       )}
+//     </div>
+//   );
+// }
+
+// // ── Processing screen ─────────────────────────────────────────────────
+// function ProcessingScreen({ status, onCancel }) {
+//   return (
+//     <div style={ps.root}>
+//       <div style={ps.card}>
+//         {/* Animated ring */}
+//         <div style={ps.ringWrap}>
+//           <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
+//             <circle cx="40" cy="40" r="34" stroke="rgba(99,102,241,0.15)" strokeWidth="5" />
+//             <circle
+//               cx="40" cy="40" r="34"
+//               stroke="url(#pg)" strokeWidth="5"
+//               strokeLinecap="round"
+//               strokeDasharray="60 154"
+//               style={{ animation: "spin 1.4s linear infinite", transformOrigin: "40px 40px" }}
+//             />
+//             <defs>
+//               <linearGradient id="pg" x1="0" y1="0" x2="80" y2="80" gradientUnits="userSpaceOnUse">
+//                 <stop stopColor="#6366f1" />
+//                 <stop offset="1" stopColor="#06b6d4" />
+//               </linearGradient>
+//             </defs>
+//           </svg>
+//           {/* Inner icon */}
+//           <div style={ps.innerIcon}>📄</div>
+//         </div>
+
+//         <h2 style={ps.title}>Preparing your document</h2>
+//         <p style={ps.status}>{status}</p>
+//         <p style={ps.sub}>
+//           Your file is being chunked, embedded, and indexed.<br />
+//           This usually takes 10–30 seconds.
+//         </p>
+
+//         {/* Step indicators */}
+//         <div style={ps.steps}>
+//           {["Extract text", "Chunk", "Embed", "Index"].map((step, i) => (
+//             <div key={step} style={ps.step}>
+//               <div style={ps.stepDot} />
+//               <span style={ps.stepLabel}>{step}</span>
+//               {i < 3 && <div style={ps.stepLine} />}
+//             </div>
+//           ))}
+//         </div>
+
+//         <button style={ps.cancelBtn} onClick={onCancel}>
+//           Cancel
+//         </button>
+//       </div>
+//     </div>
+//   );
+// }
+
+// // ── Styles ───────────────────────────────────────────────────────────
+// const ps = {
+//   root: {
+//     flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+//     padding: "40px 20px",
+//     animation: "fadeUp 0.4s ease",
+//   },
+//   card: {
+//     display: "flex", flexDirection: "column", alignItems: "center", gap: 18,
+//     background: "rgba(255,255,255,0.04)",
+//     border: "1px solid rgba(255,255,255,0.1)",
+//     borderRadius: 24, padding: "48px 40px",
+//     maxWidth: 420, width: "100%",
+//     backdropFilter: "blur(20px)",
+//     textAlign: "center",
+//   },
+//   ringWrap: {
+//     position: "relative", width: 80, height: 80,
+//     display: "flex", alignItems: "center", justifyContent: "center",
+//   },
+//   innerIcon: {
+//     position: "absolute", fontSize: 28,
+//     animation: "dotPulse 2s ease infinite",
+//   },
+//   title: {
+//     fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 22,
+//     color: "var(--text)",
+//   },
+//   status: {
+//     fontSize: 14, color: "#a5f3fc",
+//     fontWeight: 500, minHeight: 20,
+//     transition: "opacity 0.3s",
+//   },
+//   sub: {
+//     fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7,
+//   },
+//   steps: {
+//     display: "flex", alignItems: "center", gap: 0,
+//     marginTop: 8,
+//   },
+//   step: {
+//     display: "flex", alignItems: "center", gap: 0,
+//   },
+//   stepDot: {
+//     width: 8, height: 8, borderRadius: "50%",
+//     background: "var(--accent)",
+//     animation: "dotPulse 1.3s ease infinite",
+//   },
+//   stepLabel: {
+//     fontSize: 11, color: "var(--text-faint)",
+//     margin: "0 6px",
+//   },
+//   stepLine: {
+//     width: 24, height: 1,
+//     background: "rgba(255,255,255,0.1)",
+//   },
+//   cancelBtn: {
+//     marginTop: 8,
+//     padding: "8px 24px", borderRadius: 10, border: "1px solid var(--border-hi)",
+//     background: "transparent", color: "var(--text-muted)",
+//     fontSize: 13, cursor: "pointer",
+//     transition: "background 0.15s, color 0.15s",
+//   },
+// };
+
+// // ── Root layout styles ────────────────────────────────────────────────
+// const rootStyle = {
+//   position: "relative",
+//   display: "flex", flexDirection: "column",
+//   height: "100vh", overflow: "hidden",
+//   background: "var(--bg)", color: "var(--text)",
+//   fontFamily: "var(--font-body)",
+// };
+// const orbLayer = { position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0, overflow: "hidden" };
+// const orb      = { position: "absolute", borderRadius: "50%", filter: "blur(90px)", opacity: 0.14, animation: "orb 24s ease-in-out infinite" };
+// const orb1     = { width: 600, height: 600, background: "radial-gradient(circle,#6366f1,transparent 70%)", top: -220, left: -160, animationDuration: "22s" };
+// const orb2     = { width: 500, height: 500, background: "radial-gradient(circle,#06b6d4,transparent 70%)", bottom: -160, right: -120, animationDuration: "30s", animationDelay: "-9s" };
+// const orb3     = { width: 380, height: 380, background: "radial-gradient(circle,#8b5cf6,transparent 70%)", top: "45%", left: "38%", animationDuration: "18s", animationDelay: "-15s" };
+
+// App.jsx — root: manages global state and phase transitions
+// UI: olive/military theme — ALL LOGIC UNCHANGED
+import { useState, useEffect, useRef } from "react";
+import GlobalStyles  from "./components/GlobalStyles";
+import Topbar        from "./components/Topbar";
+import UploadPage    from "./components/UploadPage";
+import ChatInterface from "./components/ChatInterface";
+import { sendQuery, getDocumentStatus } from "./services/api";
+
+export default function App() {
+  // phase: "upload" → "processing" → "chat"
+  const [phase, setPhase]         = useState("upload");
+  const [sources, setSources]     = useState([]);
+  const [activeIds, setActiveIds] = useState([]);
+  const [messages, setMessages]   = useState([]);
+  const [input, setInput]         = useState("");
+  const [thinking, setThinking]   = useState(false);
+
+  // ── Processing state ──────────────────────────────────────────────
+  const [processingStatus, setProcessingStatus] = useState("");
+  const pollRef = useRef(null);
+
+  // ── Go to processing phase (LOGIC UNCHANGED) ──────────────────────
+  const handleStartChat = () => {
+    setMessages([]);
+
+    const activeSources = sources.filter((s) => activeIds.includes(s.id) && s.serverId);
+    const docSources    = activeSources.filter((s) => s.type === "document");
+
+    if (docSources.length === 0) {
+      setPhase("chat");
+      return;
+    }
+
+    setPhase("processing");
+    setProcessingStatus("Extracting text from your document…");
+
+    let attempt = 0;
+    const steps = [
+      "Extracting text from your document…",
+      "Splitting into chunks…",
+      "Generating embeddings…",
+      "Storing in vector database…",
+      "Almost ready…",
+    ];
+
+    pollRef.current = setInterval(async () => {
+      attempt++;
+      setProcessingStatus(steps[Math.min(attempt - 1, steps.length - 1)]);
+      try {
+        const statuses = await Promise.all(
+          docSources.map((s) => getDocumentStatus(s.serverId))
+        );
+        const allReady  = statuses.every((st) => st === 1);
+        const anyFailed = statuses.some((st) => st === 2);
+        if (anyFailed) {
+          clearInterval(pollRef.current);
+          setProcessingStatus("❌ Document processing failed. Please re-upload.");
+          return;
+        }
+        if (allReady) {
+          clearInterval(pollRef.current);
+          setPhase("chat");
+        }
+      } catch { /* keep polling */ }
+    }, 2500);
+  };
+
+  const handleBack = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setPhase("upload");
+  };
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
+  // ── Send a chat message (LOGIC UNCHANGED) ─────────────────────────
+  const handleSend = async () => {
+    if (!input.trim() || thinking) return;
+    const text = input.trim();
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", text }]);
+    setThinking(true);
+
+    const activeSources = sources.filter((s) => activeIds.includes(s.id) && s.serverId);
+    const structuredSrc = activeSources.find((s) =>
+      ["structured", "sheets", "database"].includes(s.type)
+    );
+    const docSrc = activeSources.find((s) => s.type === "document");
+
+    try {
+      const res = await sendQuery({
+        query:          text,
+        data_source_id: structuredSrc?.serverId ?? null,
+        document_id:    docSrc?.serverId        ?? null,
+      });
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: res.data.answer, ms: res.data.exec_time_ms },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: "Something went wrong. Please try again.", error: true },
+      ]);
+    } finally {
+      setThinking(false);
+    }
+  };
+
+  return (
+    <div style={rootStyle}>
+      <GlobalStyles />
+
+      <Topbar phase={phase} onBack={handleBack} />
+
+      {phase === "upload" && (
+        <UploadPage
+          sources={sources}
+          setSources={setSources}
+          activeIds={activeIds}
+          setActiveIds={setActiveIds}
+          onStartChat={handleStartChat}
+        />
+      )}
+
+      {phase === "processing" && (
+        <ProcessingScreen status={processingStatus} onCancel={handleBack} />
+      )}
+
+      {phase === "chat" && (
+        <ChatInterface
+          sources={sources}
+          activeIds={activeIds}
+          messages={messages}
+          input={input}
+          thinking={thinking}
+          onInput={setInput}
+          onSend={handleSend}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Processing screen — olive theme ───────────────────────────────────
+function ProcessingScreen({ status, onCancel }) {
+  return (
+    <div style={ps.root}>
+      {/* Decorative grid */}
+      <div style={ps.grid} aria-hidden />
+
+      <div style={ps.card}>
+        {/* Animated gear/ring */}
+        <div style={ps.ringWrap}>
+          <svg width="90" height="90" viewBox="0 0 90 90" fill="none">
+            <circle cx="45" cy="45" r="38" stroke="rgba(131,151,5,0.15)" strokeWidth="6"/>
+            <circle
+              cx="45" cy="45" r="38"
+              stroke="url(#procGrad)" strokeWidth="6"
+              strokeLinecap="round"
+              strokeDasharray="68 172"
+              style={{ animation: "spin 1.4s linear infinite", transformOrigin: "45px 45px" }}
+            />
+            <defs>
+              <linearGradient id="procGrad" x1="0" y1="0" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+                <stop stopColor="#839705"/>
+                <stop offset="1" stopColor="#c8e000"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div style={ps.innerIcon}>📄</div>
+        </div>
+
+        <h2 style={ps.title}>PREPARING YOUR DOCUMENT</h2>
+        <p style={ps.status}>{status}</p>
+        <p style={ps.sub}>
+          Your file is being chunked, embedded, and indexed.<br/>
+          This usually takes 10–30 seconds.
+        </p>
+
+        {/* Step track */}
+        <div style={ps.steps}>
+          {["Extract", "Chunk", "Embed", "Index"].map((step, i) => (
+            <div key={step} style={ps.stepWrap}>
+              <div style={ps.stepDot}/>
+              <span style={ps.stepLabel}>{step}</span>
+              {i < 3 && <div style={ps.stepLine}/>}
+            </div>
+          ))}
+        </div>
+
+        <button style={ps.cancelBtn} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const ps = {
+  root: {
+    flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+    padding: "40px 20px",
+    background: "linear-gradient(160deg, #f8f6f0 0%, #eae7dc 60%, #ddd9cc 100%)",
+    position: "relative",
+    animation: "fadeUp 0.4s ease",
+  },
+  grid: {
+    position: "absolute", inset: 0, pointerEvents: "none",
+    backgroundImage: `
+      linear-gradient(rgba(131,151,5,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(131,151,5,0.06) 1px, transparent 1px)
+    `,
+    backgroundSize: "48px 48px",
+  },
+  card: {
+    position: "relative",
+    display: "flex", flexDirection: "column", alignItems: "center", gap: 20,
+    background: "var(--card)",
+    border: "2px solid rgba(131,151,5,0.3)",
+    borderRadius: "var(--radius-xl)",
+    padding: "52px 48px",
+    maxWidth: 440, width: "100%",
+    textAlign: "center",
+    boxShadow: "0 20px 60px rgba(65,67,27,0.25)",
+  },
+  ringWrap: {
+    position: "relative", width: 90, height: 90,
+    display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  innerIcon: {
+    position: "absolute", fontSize: 30,
+    animation: "dotPulse 2s ease infinite",
+  },
+  title: {
+    fontFamily: "var(--font-display)",
+    fontSize: 22, letterSpacing: "2.5px",
+    color: "var(--text-on-dark)",
+  },
+  status: {
+    fontFamily: "var(--font-ui)", fontSize: 14, fontWeight: 600,
+    letterSpacing: "0.5px",
+    color: "var(--accent-light)",
+    minHeight: 20,
+  },
+  sub: {
+    fontFamily: "var(--font-body)", fontSize: 13,
+    color: "var(--text-on-dark-muted)", lineHeight: 1.7,
+  },
+  steps: {
+    display: "flex", alignItems: "center", gap: 0,
+    marginTop: 4,
+  },
+  stepWrap: {
+    display: "flex", alignItems: "center",
+  },
+  stepDot: {
+    width: 8, height: 8, borderRadius: "50%",
+    background: "var(--accent)",
+    animation: "dotPulse 1.3s ease infinite",
+  },
+  stepLabel: {
+    fontFamily: "var(--font-ui)", fontSize: 10, fontWeight: 700,
+    letterSpacing: "1px", textTransform: "uppercase",
+    color: "var(--text-on-dark-muted)",
+    margin: "0 6px",
+  },
+  stepLine: {
+    width: 24, height: 1,
+    background: "rgba(255,255,255,0.12)",
+  },
+  cancelBtn: {
+    marginTop: 4,
+    padding: "9px 28px", borderRadius: "var(--radius)",
+    border: "1px solid rgba(255,255,255,0.15)",
+    background: "transparent",
+    color: "var(--text-on-dark-muted)",
+    fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700,
+    letterSpacing: "1px", textTransform: "uppercase",
+    cursor: "pointer", transition: "all 0.15s",
+  },
+};
+
+const rootStyle = {
+  position: "relative",
+  display: "flex", flexDirection: "column",
+  height: "100vh", overflow: "hidden",
+  background: "var(--bg)", color: "var(--text)",
+  fontFamily: "var(--font-body)",
+};
+
+>>>>>>>>>>>>>>>>>
+// ChatInterface.jsx — Step 2: Chat with the selected data sources
+// Olive/military theme — ALL LOGIC UNCHANGED
+import { useRef, useEffect } from "react";
+import Spinner from "./Spinner";
+import { SOURCE_ICONS, getModeColor } from "../utils/helpers";
+
+export default function ChatInterface({
+  sources,
+  activeIds,
+  messages,
+  input,
+  thinking,
+  onInput,
+  onSend,
+}) {
+  const bottomRef = useRef(null);
+  const textRef   = useRef(null);
+
+  const activeSources = sources.filter((s) => activeIds.includes(s.id));
+  const modeColor     = getModeColor(activeSources);
+  const hasStructured = activeSources.some((s) =>
+    ["structured", "sheets", "database"].includes(s.type)
+  );
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, thinking]);
+
+  useEffect(() => {
+    textRef.current?.focus();
+  }, []);
+
+  const onKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); }
+  };
+
+  const suggestions = hasStructured
+    ? ["Summarise overall trends", "Detect anomalies", "Calculate key KPIs", "Financial health score"]
+    : ["Summarise this document", "What are the main topics?", "Key findings or conclusions", "Compare sections"];
+
+  return (
+    <div style={s.root}>
+
+      {/* ── Active sources bar ── */}
+      <div style={s.sourcesBar}>
+        <span style={s.barLabel}>Analysing</span>
+        <div style={s.pillRow}>
+          {activeSources.map((src) => (
+            <span key={src.id} style={s.pill}>
+              {SOURCE_ICONS[src.type]} {src.name}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Messages ── */}
+      <div style={s.messages}>
+        {messages.length === 0 && (
+          <EmptyState suggestions={suggestions} onSuggest={onInput} />
+        )}
+
+        {messages.map((m, i) => (
+          <MessageBubble key={i} message={m} index={i} />
+        ))}
+
+        {thinking && (
+          <div style={{ ...s.row, justifyContent: "flex-start" }}>
+            <div style={{ ...s.bubble, ...s.bubbleBot }}>
+              <div style={s.dots}>
+                <span className="dot-bounce" />
+                <span className="dot-bounce" />
+                <span className="dot-bounce" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+
+      {/* ── Input ── */}
+      <div style={s.inputArea}>
+        <div style={s.inputWrap}>
+          <textarea
+            ref={textRef}
+            style={s.textarea}
+            value={input}
+            onChange={(e) => onInput(e.target.value)}
+            onKeyDown={onKey}
+            placeholder="Ask a question about your data…"
+            rows={1}
+          />
+          <button
+            style={{
+              ...s.sendBtn,
+              opacity: !input.trim() || thinking ? 0.35 : 1,
+            }}
+            onClick={onSend}
+            disabled={!input.trim() || thinking}
+          >
+            {thinking
+              ? <Spinner size={14} color="#fff" />
+              : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="22" y1="2" x2="11" y2="13"/>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+            }
+          </button>
+        </div>
+        <p style={s.hint}>Enter to send · Shift+Enter for new line</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Empty state ──────────────────────────────────────────────────────
+function EmptyState({ suggestions, onSuggest }) {
+  return (
+    <div style={s.empty}>
+      <div style={s.emptyIcon}>✦</div>
+      <h3 style={s.emptyTitle}>Ready to Analyse</h3>
+      <p style={s.emptySub}>Ask anything about your data, or try one of these:</p>
+      <div style={s.chips}>
+        {suggestions.map((c) => (
+          <button
+            key={c}
+            className="suggestion-chip"
+            style={s.chip}
+            onClick={() => onSuggest(c)}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Message bubble ───────────────────────────────────────────────────
+function MessageBubble({ message, index }) {
+  const isUser = message.role === "user";
+  return (
+    <div style={{ ...s.row, justifyContent: isUser ? "flex-end" : "flex-start", animationDelay: `${index * 0.03}s` }}>
+      <div style={{
+        ...s.bubble,
+        ...(isUser ? s.bubbleUser : s.bubbleBot),
+        ...(message.error ? s.bubbleError : {}),
+      }}>
+        {message.text}
+        {message.ms && (
+          <span style={s.execTime}>{(message.ms / 1000).toFixed(1)}s</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const s = {
+  root: {
+    flex: 1, display: "flex", flexDirection: "column", overflow: "hidden",
+    background: "linear-gradient(160deg, #f8f6f0 0%, #eae7dc 60%, #ddd9cc 100%)",
+  },
+
+  sourcesBar: {
+    display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+    padding: "10px 28px",
+    borderBottom: "1px solid rgba(0,0,0,0.08)",
+    background: "var(--navy)",
+    flexShrink: 0,
+  },
+  barLabel: {
+    fontFamily: "var(--font-ui)", fontSize: 10, fontWeight: 700,
+    letterSpacing: "1.5px", textTransform: "uppercase",
+    color: "var(--text-on-dark-muted)",
+  },
+  pillRow: { display: "flex", gap: 6, flexWrap: "wrap" },
+  pill: {
+    fontFamily: "var(--font-ui)", fontSize: 11, fontWeight: 600,
+    letterSpacing: "0.5px",
+    padding: "3px 11px", borderRadius: 20,
+    border: "1px solid rgba(131,151,5,0.4)",
+    color: "var(--accent-light)",
+    background: "rgba(131,151,5,0.12)",
+    display: "flex", alignItems: "center", gap: 5,
+  },
+
+  messages: {
+    flex: 1, overflowY: "auto",
+    padding: "28px 32px",
+    display: "flex", flexDirection: "column", gap: 16,
+  },
+
+  empty: {
+    flex: 1, display: "flex", flexDirection: "column",
+    alignItems: "center", justifyContent: "center",
+    textAlign: "center", padding: "60px 20px",
+    animation: "fadeUp 0.5s ease",
+  },
+  emptyIcon: {
+    fontSize: 48, marginBottom: 16, color: "var(--accent)",
+    fontFamily: "var(--font-display)",
+  },
+  emptyTitle: {
+    fontFamily: "var(--font-display)", fontWeight: 400, fontSize: 28,
+    letterSpacing: "2px",
+    color: "var(--text)", marginBottom: 8,
+  },
+  emptySub: {
+    fontFamily: "var(--font-body)", fontSize: 14,
+    color: "var(--text-muted)", marginBottom: 24,
+  },
+  chips: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" },
+  chip: {
+    padding: "7px 16px", borderRadius: 20,
+    border: "1px solid rgba(0,0,0,0.12)",
+    background: "rgba(255,255,255,0.7)",
+    color: "var(--text-muted)", fontSize: 13,
+    fontFamily: "var(--font-body)",
+    cursor: "pointer", transition: "all 0.15s",
+  },
+
+  row: {
+    display: "flex",
+    animation: "msgIn 0.22s ease forwards",
+  },
+  bubble: {
+    maxWidth: "70%", padding: "12px 16px",
+    borderRadius: "var(--radius-lg)",
+    fontSize: 14, lineHeight: 1.7,
+    fontFamily: "var(--font-body)",
+    whiteSpace: "pre-wrap", wordBreak: "break-word",
+  },
+  bubbleUser: {
+    borderBottomRightRadius: 4,
+    background: "var(--card)",
+    color: "var(--text-on-dark)",
+    boxShadow: "0 4px 16px rgba(65,67,27,0.3)",
+  },
+  bubbleBot: {
+    borderBottomLeftRadius: 4,
+    background: "rgba(255,255,255,0.85)",
+    border: "1px solid rgba(0,0,0,0.08)",
+    color: "var(--text)",
+    backdropFilter: "blur(8px)",
+    boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+  },
+  bubbleError: {
+    background: "rgba(239,68,68,0.08)",
+    borderColor: "rgba(239,68,68,0.2)",
+    color: "#c53030",
+  },
+  execTime: {
+    display: "block", marginTop: 6,
+    fontFamily: "var(--font-ui)", fontSize: 10, fontWeight: 600,
+    letterSpacing: "0.5px",
+    color: "rgba(0,0,0,0.2)", textAlign: "right",
+  },
+  dots: { display: "flex", gap: 5, alignItems: "center", height: 20, padding: "0 4px" },
+
+  inputArea: {
+    flexShrink: 0,
+    padding: "16px 32px 22px",
+    borderTop: "1px solid rgba(0,0,0,0.08)",
+    background: "rgba(248,246,240,0.9)",
+    backdropFilter: "blur(12px)",
+  },
+  inputWrap: {
+    display: "flex", alignItems: "flex-end", gap: 10,
+    background: "#fff",
+    border: "1px solid rgba(0,0,0,0.12)",
+    borderRadius: "var(--radius-lg)",
+    padding: "10px 10px 10px 16px",
+    transition: "border-color 0.2s, box-shadow 0.2s",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+  },
+  textarea: {
+    flex: 1, background: "none", border: "none",
+    color: "var(--text)", fontSize: 14, lineHeight: 1.6,
+    resize: "none", minHeight: 24, maxHeight: 140,
+    fontFamily: "var(--font-body)",
+  },
+  sendBtn: {
+    width: 36, height: 36, borderRadius: 10, border: "none",
+    background: "var(--card)",
+    color: "#fff", cursor: "pointer", flexShrink: 0,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    transition: "opacity 0.15s, transform 0.1s",
+  },
+  hint: {
+    fontFamily: "var(--font-ui)", fontSize: 11,
+    color: "var(--text-faint)", letterSpacing: "0.5px",
+    textAlign: "center", marginTop: 8,
+  },
+};
+>>>>>>>
+// DatabaseForm.jsx
+import { useState } from "react";
+import Spinner from "./Spinner";
+
+export default function DatabaseForm({ onConnect }) {
+  const [conn, setConn]     = useState("");
+  const [table, setTable]   = useState("");
+  const [query, setQuery]   = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError]   = useState("");
+
+  const handleSubmit = async () => {
+    if (!conn.trim() || !table.trim()) return;
+    setError("");
+    setLoading(true);
+    try {
+      await onConnect(conn.trim(), table.trim(), query.trim() || null);
+      setConn(""); setTable(""); setQuery("");
+    } catch (e) {
+      setError(e?.response?.data?.detail || "Connection failed. Check your credentials and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const valid = conn.trim() && table.trim();
+
+  return (
+    <div style={s.card}>
+      <p style={s.cardTitle}>Connect a SQL Database</p>
+      <p style={s.cardSub}>PostgreSQL · MySQL · SQLite · MSSQL</p>
+
+      <label style={s.label}>Connection String *</label>
+      <input
+        style={s.input}
+        value={conn}
+        onChange={(e) => setConn(e.target.value)}
+        placeholder="postgresql://user:pass@host:5432/dbname"
+      />
+
+      <label style={s.label}>Table Name *</label>
+      <input
+        style={s.input}
+        value={table}
+        onChange={(e) => setTable(e.target.value)}
+        placeholder="sales_data"
+      />
+
+      <label style={s.label}>Custom SQL Query (optional)</label>
+      <input
+        style={s.input}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="SELECT * FROM sales WHERE year = 2024"
+      />
+      <p style={s.hint}>Leave blank to read the entire table</p>
+
+      {error && <p style={s.error}>{error}</p>}
+
+      <button
+        style={{ ...s.btn, opacity: !valid || loading ? 0.4 : 1 }}
+        onClick={handleSubmit}
+        disabled={!valid || loading}
+      >
+        {loading ? (
+          <span style={s.btnInner}><Spinner size={14} color="#fff" /> Connecting…</span>
+        ) : (
+          "Connect Database"
+        )}
+      </button>
+    </div>
+  );
+}
+
+const s = {
+  card: {
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-lg)",
+    padding: "24px",
+    display: "flex", flexDirection: "column", gap: 12,
+  },
+  cardTitle: {
+    fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15,
+    color: "var(--text)",
+  },
+  cardSub: { fontSize: 12, color: "var(--text-faint)", marginTop: -6 },
+  label: {
+    fontSize: 11, fontWeight: 600, letterSpacing: "0.8px",
+    textTransform: "uppercase", color: "var(--text-muted)",
+  },
+  input: {
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid var(--border-hi)",
+    borderRadius: "var(--radius)",
+    padding: "10px 14px",
+    color: "var(--text)",
+    fontSize: 13, width: "100%",
+  },
+  hint: { fontSize: 11, color: "var(--text-faint)", marginTop: -6 },
+  error: { fontSize: 12, color: "#fca5a5", padding: "8px 12px", borderRadius: 8, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" },
+  btn: {
+    marginTop: 4,
+    padding: "11px 20px", borderRadius: "var(--radius)", border: "none",
+    background: "linear-gradient(135deg,#f59e0b,#d97706)",
+    color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer",
+    transition: "opacity 0.15s",
+  },
+  btnInner: { display: "flex", alignItems: "center", gap: 8, justifyContent: "center" },
+};
+>>>>>>>>>>>>
+// FileDropzone.jsx — drag-and-drop or click to upload multiple files
+// Styled to match olive/military theme
+import { useRef, useState } from "react";
+import Spinner from "./Spinner";
+
+export default function FileDropzone({ onFiles, uploading }) {
+  const [dragging, setDragging] = useState(false);
+  const ref = useRef(null);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    if (e.dataTransfer.files.length) onFiles(e.dataTransfer.files);
+  };
+
+  return (
+    <div
+      style={{
+        ...s.zone,
+        ...(dragging   ? s.zoneDrag      : {}),
+        ...(uploading  ? s.zoneUploading : {}),
+      }}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+      onClick={() => !uploading && ref.current?.click()}
+    >
+      <input
+        ref={ref}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        accept=".pdf,.docx,.txt,.xlsx,.xls,.csv"
+        onChange={(e) => e.target.files?.length && onFiles(e.target.files)}
+      />
+
+      {uploading ? (
+        <>
+          <Spinner size={28} color="var(--accent)" />
+          <p style={s.main}>Uploading…</p>
+        </>
+      ) : (
+        <>
+          <div style={{ ...s.uploadIcon, ...(dragging ? s.uploadIconDrag : {}) }}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+          </div>
+          <p style={s.main}>
+            {dragging ? "Drop to upload" : "Drag & drop your files here"}
+          </p>
+          <p style={s.sub}>or click to browse</p>
+          <p style={s.types}>PDF · DOCX · TXT · XLSX · XLS · CSV</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+const s = {
+  zone: {
+    border: "2px dashed rgba(255,255,255,0.2)",
+    borderRadius: "var(--radius-lg)",
+    padding: "36px 24px",
+    display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+    textAlign: "center", cursor: "pointer",
+    background: "rgba(255,255,255,0.06)",
+    transition: "border-color 0.2s, background 0.2s, transform 0.15s",
+    userSelect: "none",
+  },
+  zoneDrag: {
+    borderColor: "var(--accent)",
+    background: "rgba(131,151,5,0.12)",
+    transform: "scale(1.01)",
+  },
+  zoneUploading: {
+    cursor: "default",
+    borderStyle: "solid",
+    borderColor: "rgba(131,151,5,0.5)",
+  },
+  uploadIcon: {
+    color: "rgba(216,223,196,0.4)",
+    transition: "color 0.2s, transform 0.2s",
+    marginBottom: 4,
+  },
+  uploadIconDrag: {
+    color: "var(--accent)",
+    transform: "translateY(-4px)",
+  },
+  main: {
+    fontFamily: "var(--font-display)",
+    fontSize: 16, letterSpacing: "0.5px",
+    color: "var(--text-on-dark)",
+  },
+  sub: {
+    fontFamily: "var(--font-body)",
+    fontSize: 13,
+    color: "var(--text-on-dark-muted)",
+    marginTop: -2,
+  },
+  types: {
+    fontFamily: "var(--font-ui)",
+    fontSize: 10, letterSpacing: "1px",
+    color: "rgba(216,223,196,0.3)",
+    marginTop: 4,
+    textTransform: "uppercase",
+  },
+};
+
+import { useState, useRef } from "react";
+import { uploadStructured, uploadDocument } from "@/services/api";
+
+export default function FileUpload({ onUploaded }) {
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [status, setStatus] = useState(null); // null | "success" | "error"
+  const [statusMsg, setStatusMsg] = useState("");
+  const inputRef = useRef(null);
+
+  const processFile = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    setStatus(null);
+    const ext = file.name.split(".").pop().toLowerCase();
+    try {
+      if (["pdf", "docx", "txt"].includes(ext)) {
+        await uploadDocument(file);
+      } else {
+        await uploadStructured(file);
+      }
+      setStatus("success");
+      setStatusMsg(`${file.name} uploaded`);
+      onUploaded();
+      setTimeout(() => setStatus(null), 3000);
+    } catch {
+      setStatus("error");
+      setStatusMsg("Upload failed. Try again.");
+      setTimeout(() => setStatus(null), 4000);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files[0];
+    processFile(file);
+  };
+
+  return (
+    <div className="fu-root">
+      <div className="fu-label">Upload File</div>
+
+      <div
+        className={`fu-zone ${dragging ? "drag" : ""} ${uploading ? "uploading" : ""}`}
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        onClick={() => !uploading && inputRef.current?.click()}
+      >
+        <input
+          ref={inputRef} type="file"
+          style={{ display: "none" }}
+          onChange={e => processFile(e.target.files[0])}
+          accept=".pdf,.docx,.txt,.xlsx,.xls,.csv"
+        />
+        {uploading ? (
+          <div className="fu-spinner" />
+        ) : (
+          <svg className="fu-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+          </svg>
+        )}
+        <span className="fu-text">
+          {uploading ? "Uploading…" : "Drop file or click"}
+        </span>
+        <span className="fu-sub">PDF · DOCX · TXT · XLSX · CSV</span>
+      </div>
+
+      {status && (
+        <div className={`fu-status ${status}`}>
+          {status === "success" ? "✓" : "✗"} {statusMsg}
+        </div>
+      )}
+
+      <style>{`
+        .fu-root { font-family: var(--font, 'DM Sans', system-ui); }
+        .fu-label {
+          font-size: 10px; font-weight: 600; letter-spacing: 1.1px;
+          text-transform: uppercase; color: rgba(232,234,240,0.35);
+          margin-bottom: 8px;
+        }
+        .fu-zone {
+          display: flex; flex-direction: column; align-items: center;
+          gap: 6px; padding: 18px 12px; border-radius: 10px;
+          border: 1px dashed rgba(255,255,255,0.15);
+          background: rgba(255,255,255,0.03);
+          cursor: pointer; text-align: center;
+          transition: border-color 0.2s, background 0.2s;
+        }
+        .fu-zone:hover, .fu-zone.drag {
+          border-color: rgba(99,102,241,0.5);
+          background: rgba(99,102,241,0.07);
+        }
+        .fu-zone.uploading { cursor: default; border-style: solid; }
+        .fu-icon { color: rgba(232,234,240,0.35); }
+        .fu-text { font-size: 12px; color: rgba(232,234,240,0.5); font-weight: 500; }
+        .fu-sub { font-size: 10px; color: rgba(232,234,240,0.25); letter-spacing: 0.3px; }
+        .fu-spinner {
+          width: 20px; height: 20px; border-radius: 50%;
+          border: 2px solid rgba(255,255,255,0.1);
+          border-top-color: #6366f1;
+          animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .fu-status {
+          margin-top: 8px; font-size: 11px; padding: 6px 10px;
+          border-radius: 6px; animation: fadeUp 0.2s ease;
+        }
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .fu-status.success {
+          background: rgba(16,185,129,0.12); color: #6ee7b7;
+          border: 1px solid rgba(16,185,129,0.25);
+        }
+        .fu-status.error {
+          background: rgba(239,68,68,0.1); color: #fca5a5;
+          border: 1px solid rgba(239,68,68,0.2);
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// GlobalStyles.jsx — inject once at App root
+export default function GlobalStyles() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Special+Elite&family=Rajdhani:wght@400;500;600;700&family=Barlow:wght@300;400;500;600&display=swap');
+
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      :root {
+        --navy:         #313E17;
+        --card:         #41431B;
+        --accent:       #839705;
+        --accent-light: #9db006;
+        --accent-glow:  rgba(131,151,5,0.25);
+        --bg:           #f4f2ec;
+        --bg2:          #eae7dc;
+        --text:         #1a1f0a;
+        --text-muted:   #5a6040;
+        --text-faint:   #8a9070;
+        --text-on-dark: #d8dfc4;
+        --text-on-dark-muted: rgba(216,223,196,0.6);
+        --border-dark:  rgba(255,255,255,0.1);
+        --border-light: rgba(0,0,0,0.1);
+        --radius:       10px;
+        --radius-lg:    18px;
+        --radius-xl:    24px;
+        --font-display: 'Bebas Neue', 'Special Elite', serif;
+        --font-stamp:   'Special Elite', serif;
+        --font-body:    'Barlow', system-ui, sans-serif;
+        --font-ui:      'Rajdhani', system-ui, sans-serif;
+      }
+
+      html, body, #root {
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-body);
+      }
+
+      ::-webkit-scrollbar { width: 4px; }
+      ::-webkit-scrollbar-thumb { background: rgba(131,151,5,0.3); border-radius: 4px; }
+
+      textarea, input {
+        font-family: var(--font-body);
+        color: var(--text-on-dark);
+      }
+      textarea:focus, input:focus { outline: none; }
+      button { font-family: var(--font-ui); }
+
+      /* ── Animations ── */
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(14px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+      }
+      @keyframes slideIn {
+        from { opacity: 0; transform: translateX(-8px); }
+        to   { opacity: 1; transform: translateX(0); }
+      }
+      @keyframes msgIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes dotPulse {
+        0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+        40%            { transform: translateY(-5px); opacity: 1; }
+      }
+      @keyframes orb {
+        0%, 100% { transform: translate(0,0) scale(1); }
+        33%       { transform: translate(30px,-20px) scale(1.04); }
+        66%       { transform: translate(-15px,25px) scale(0.96); }
+      }
+      @keyframes roboFloat {
+        0%, 100% { transform: translateY(0px) rotate(-1deg); }
+        50%       { transform: translateY(-12px) rotate(1deg); }
+      }
+      @keyframes roboGlow {
+        0%, 100% { filter: drop-shadow(0 0 8px rgba(131,151,5,0.4)); }
+        50%       { filter: drop-shadow(0 0 20px rgba(131,151,5,0.7)); }
+      }
+      @keyframes scanline {
+        0%   { transform: translateY(-100%); }
+        100% { transform: translateY(400%); }
+      }
+      @keyframes blink {
+        0%, 90%, 100% { opacity: 1; }
+        95% { opacity: 0; }
+      }
+      @keyframes shimmer {
+        0%   { background-position: -400px 0; }
+        100% { background-position: 400px 0; }
+      }
+
+      /* ── Typing dots ── */
+      .dot-bounce {
+        display: inline-block;
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--accent);
+        animation: dotPulse 1.3s ease infinite;
+      }
+      .dot-bounce:nth-child(2) { animation-delay: 0.15s; }
+      .dot-bounce:nth-child(3) { animation-delay: 0.30s; }
+
+      /* ── Chip hover ── */
+      .suggestion-chip:hover {
+        background: rgba(131,151,5,0.15) !important;
+        border-color: rgba(131,151,5,0.5) !important;
+        color: var(--accent-light) !important;
+      }
+
+      /* ── Source card hover ── */
+      .source-card:hover {
+        background: rgba(255,255,255,0.07) !important;
+        border-color: rgba(131,151,5,0.3) !important;
+      }
+
+      /* ── Tab hover ── */
+      .input-tab:hover:not(.active-tab) {
+        background: rgba(255,255,255,0.08) !important;
+        color: var(--text-on-dark) !important;
+      }
+
+      /* ── Body bg gradient ── */
+      body {
+        background: linear-gradient(145deg, #f4f2ec 0%, #eae7dc 40%, #e0ddd0 100%) !important;
+      }
+    `}</style>
+  );
+}
+
+// GoogleSheetsForm.jsx — olive theme, logic UNCHANGED
+import { useState } from "react";
+import Spinner from "./Spinner";
+
+export function GoogleSheetsForm({ onConnect }) {
+  const [url, setUrl]         = useState("");
+  const [sheet, setSheet]     = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
+
+  const handleSubmit = async () => {
+    if (!url.trim()) return;
+    setError("");
+    setLoading(true);
+    try {
+      await onConnect(url.trim(), sheet.trim() || null);
+      setUrl(""); setSheet("");
+    } catch (e) {
+      setError(e?.response?.data?.detail || "Could not connect. Check the URL and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const valid = url.trim().includes("docs.google.com/spreadsheets");
+
+  return (
+    <div style={form.card}>
+      <p style={form.cardTitle}>Connect a Google Sheet</p>
+      <p style={form.cardSub}>Sheet must be accessible via link (no sign-in required)</p>
+
+      <label style={form.label}>Spreadsheet URL *</label>
+      <input
+        style={form.input}
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        placeholder="https://docs.google.com/spreadsheets/d/…"
+      />
+
+      <label style={form.label}>Sheet / Tab name (optional)</label>
+      <input
+        style={form.input}
+        value={sheet}
+        onChange={(e) => setSheet(e.target.value)}
+        placeholder="Sheet1 — leave blank for the first tab"
+      />
+
+      {error && <p style={form.error}>{error}</p>}
+
+      <button
+        style={{ ...form.btn, ...form.btnGreen, opacity: !valid || loading ? 0.4 : 1 }}
+        onClick={handleSubmit}
+        disabled={!valid || loading}
+      >
+        {loading
+          ? <span style={form.btnInner}><Spinner size={14} color="#fff" /> Connecting…</span>
+          : "CONNECT SHEET"
+        }
+      </button>
+    </div>
+  );
+}
+
+// DatabaseForm.jsx — olive theme, logic UNCHANGED
+export function DatabaseForm({ onConnect }) {
+  const [conn, setConn]       = useState("");
+  const [table, setTable]     = useState("");
+  const [query, setQuery]     = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
+
+  const handleSubmit = async () => {
+    if (!conn.trim() || !table.trim()) return;
+    setError("");
+    setLoading(true);
+    try {
+      await onConnect(conn.trim(), table.trim(), query.trim() || null);
+      setConn(""); setTable(""); setQuery("");
+    } catch (e) {
+      setError(e?.response?.data?.detail || "Connection failed. Check your credentials and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const valid = conn.trim() && table.trim();
+
+  return (
+    <div style={form.card}>
+      <p style={form.cardTitle}>Connect a SQL Database</p>
+      <p style={form.cardSub}>PostgreSQL · MySQL · SQLite · MSSQL</p>
+
+      <label style={form.label}>Connection String *</label>
+      <input
+        style={form.input}
+        value={conn}
+        onChange={(e) => setConn(e.target.value)}
+        placeholder="postgresql://user:pass@host:5432/dbname"
+      />
+
+      <label style={form.label}>Table Name *</label>
+      <input
+        style={form.input}
+        value={table}
+        onChange={(e) => setTable(e.target.value)}
+        placeholder="sales_data"
+      />
+
+      <label style={form.label}>Custom SQL Query (optional)</label>
+      <input
+        style={form.input}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="SELECT * FROM sales WHERE year = 2024"
+      />
+      <p style={form.hint}>Leave blank to read the entire table</p>
+
+      {error && <p style={form.error}>{error}</p>}
+
+      <button
+        style={{ ...form.btn, ...form.btnAmber, opacity: !valid || loading ? 0.4 : 1 }}
+        onClick={handleSubmit}
+        disabled={!valid || loading}
+      >
+        {loading
+          ? <span style={form.btnInner}><Spinner size={14} color="#fff" /> Connecting…</span>
+          : "CONNECT DATABASE"
+        }
+      </button>
+    </div>
+  );
+}
+
+// ── Shared form styles (olive theme) ──────────────────────────────────
+const form = {
+  card: {
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: "var(--radius-lg)",
+    padding: "20px",
+    display: "flex", flexDirection: "column", gap: 10,
+  },
+  cardTitle: {
+    fontFamily: "var(--font-display)",
+    fontWeight: 400, fontSize: 16, letterSpacing: "1px",
+    color: "var(--text-on-dark)",
+  },
+  cardSub: {
+    fontFamily: "var(--font-body)",
+    fontSize: 12, color: "var(--text-on-dark-muted)", marginTop: -4,
+  },
+  label: {
+    fontFamily: "var(--font-ui)", fontSize: 10, fontWeight: 700,
+    letterSpacing: "1px", textTransform: "uppercase",
+    color: "var(--text-on-dark-muted)",
+  },
+  input: {
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.15)",
+    borderRadius: "var(--radius)",
+    padding: "9px 13px",
+    color: "var(--text-on-dark)",
+    fontFamily: "var(--font-body)",
+    fontSize: 13, width: "100%",
+  },
+  hint: {
+    fontFamily: "var(--font-ui)", fontSize: 10, letterSpacing: "0.5px",
+    color: "var(--text-on-dark-muted)", marginTop: -4,
+  },
+  error: {
+    fontFamily: "var(--font-body)", fontSize: 12,
+    color: "#fca5a5", padding: "8px 12px", borderRadius: 8,
+    background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)",
+  },
+  btn: {
+    marginTop: 4, padding: "11px 20px",
+    borderRadius: "var(--radius)", border: "none",
+    color: "#fff", fontSize: 12, fontFamily: "var(--font-ui)",
+    fontWeight: 700, letterSpacing: "1.5px",
+    cursor: "pointer", transition: "opacity 0.15s",
+  },
+  btnGreen: { background: "linear-gradient(135deg, #6b8f00, #839705)" },
+  btnAmber: { background: "linear-gradient(135deg, #9a6b00, #c28a00)" },
+  btnInner: { display: "flex", alignItems: "center", gap: 8, justifyContent: "center" },
+};
+
+// Default exports for separate import compatibility
+export default GoogleSheetsForm;
+
+// SourceCard.jsx — single uploaded/connected data source with status + selection
+// Olive/military theme — logic UNCHANGED
+import Spinner from "./Spinner";
+import { SOURCE_ICONS, SOURCE_LABELS } from "../utils/helpers";
+
+export default function SourceCard({ source, selected, onToggle }) {
+  const { name, type, status } = source;
+  const isReady   = status === "ready";
+  const isLoading = status === "uploading";
+  const isError   = status === "error";
+  const canSelect = isReady;
+
+  return (
+    <div
+      className="source-card"
+      style={{
+        ...s.card,
+        ...(selected ? s.cardSelected : {}),
+        ...(isError  ? s.cardError   : {}),
+        cursor: canSelect ? "pointer" : "default",
+      }}
+      onClick={() => canSelect && onToggle(source.id)}
+      title={canSelect ? (selected ? "Deselect source" : "Select source") : ""}
+    >
+      {/* Left: icon + info */}
+      <div style={s.left}>
+        <span style={s.icon}>{SOURCE_ICONS[type] ?? "📁"}</span>
+        <div style={s.info}>
+          <p style={s.name}>{name}</p>
+          <p style={s.meta}>
+            {SOURCE_LABELS[type] ?? type}
+            {isLoading && " · uploading…"}
+            {isError   && " · failed"}
+          </p>
+        </div>
+      </div>
+
+      {/* Right: status indicator */}
+      <div style={s.right}>
+        {isLoading && <Spinner size={16} color="var(--accent)" />}
+        {isError   && <span style={s.errBadge}>✗</span>}
+        {isReady   && (
+          <div style={{ ...s.check, ...(selected ? s.checkSelected : {}) }}>
+            {selected && "✓"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const s = {
+  card: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "10px 14px", borderRadius: "var(--radius)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    background: "rgba(255,255,255,0.05)",
+    transition: "all 0.15s",
+    animation: "slideIn 0.25s ease forwards",
+  },
+  cardSelected: {
+    borderColor: "rgba(131,151,5,0.5)",
+    background: "rgba(131,151,5,0.12)",
+  },
+  cardError: {
+    borderColor: "rgba(248,113,113,0.3)",
+    background: "rgba(248,113,113,0.06)",
+  },
+  left:  { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
+  icon:  { fontSize: 20, flexShrink: 0 },
+  info:  { minWidth: 0 },
+  name: {
+    fontFamily: "var(--font-body)", fontSize: 13, fontWeight: 500,
+    color: "var(--text-on-dark)",
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    maxWidth: 220,
+  },
+  meta: {
+    fontFamily: "var(--font-ui)", fontSize: 10, fontWeight: 600,
+    letterSpacing: "0.5px", textTransform: "capitalize",
+    color: "var(--text-on-dark-muted)", marginTop: 2,
+  },
+  right: { display: "flex", alignItems: "center", flexShrink: 0 },
+  errBadge: { color: "#f87171", fontSize: 14, fontWeight: 700 },
+  check: {
+    width: 20, height: 20, borderRadius: 5,
+    border: "2px solid rgba(255,255,255,0.2)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: 11, color: "#fff", transition: "all 0.15s",
+  },
+  checkSelected: {
+    background: "var(--accent)", borderColor: "var(--accent)",
+  },
+};
+
+// Spinner.jsx — tiny reusable loading indicator (unchanged)
+export default function Spinner({ size = 18, color = "var(--accent)" }) {
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        border: `2px solid ${color}33`,
+        borderTopColor: color,
+        animation: "spin 0.7s linear infinite",
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+// UploadPage.jsx — Step 1: Add files and connect data sources, then start chat
+// UI: left hero panel + right olive card — matching brand screenshot
+import { useState, useCallback } from "react";
+import FileDropzone     from "./FileDropzone";
+import GoogleSheetsForm from "./GoogleSheetsForm";
+import DatabaseForm     from "./DatabaseForm";
+import SourceCard       from "./SourceCard";
+import {
+  uploadStructured,
+  uploadDocument,
+  connectGoogleSheets,
+  connectDatabase,
+} from "../services/api";
+import { getFileCategory, nextId } from "../utils/helpers";
+
+export default function UploadPage({ sources, setSources, activeIds, setActiveIds, onStartChat }) {
+  const [tab, setTab] = useState("files");
+  const [anyUploading, setAnyUploading] = useState(false);
+
+  // ── Helpers (UNCHANGED logic) ────────────────────────────────────
+  const addSource   = (src)       => setSources((p) => [...p, src]);
+  const patchSource = (id, obj)   => setSources((p) => p.map((s) => s.id === id ? { ...s, ...obj } : s));
+  const toggleSelect = (id)       => setActiveIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
+
+  const handleFiles = useCallback(async (fileList) => {
+    const files = Array.from(fileList);
+    setAnyUploading(true);
+    await Promise.all(
+      files.map(async (file) => {
+        const type = getFileCategory(file.name);
+        if (!type) return;
+        const id = nextId();
+        addSource({ id, name: file.name, type, status: "uploading", serverId: null });
+        try {
+          const res = type === "document"
+            ? await uploadDocument(file)
+            : await uploadStructured(file);
+          patchSource(id, { status: "ready", serverId: res.data.id });
+          setActiveIds((p) => [...p, id]);
+        } catch {
+          patchSource(id, { status: "error" });
+        }
+      })
+    );
+    setAnyUploading(false);
+  }, []);
+
+  const handleSheets = async (url, sheetName) => {
+    const id = nextId();
+    const shortName = "Sheet: " + (url.split("/d/")[1]?.slice(0, 14) ?? "…") + "…";
+    addSource({ id, name: shortName, type: "sheets", status: "uploading", serverId: null });
+    try {
+      const res = await connectGoogleSheets(url, sheetName);
+      patchSource(id, { status: "ready", serverId: res.data.id, name: `Sheet: ${res.data.sheet_id?.slice(0, 12)}…` });
+      setActiveIds((p) => [...p, id]);
+    } catch (e) {
+      patchSource(id, { status: "error" });
+      throw e;
+    }
+  };
+
+  const handleDB = async (connStr, tableName, query) => {
+    const id = nextId();
+    addSource({ id, name: `DB: ${tableName}`, type: "database", status: "uploading", serverId: null });
+    try {
+      const res = await connectDatabase(connStr, tableName, query);
+      patchSource(id, { status: "ready", serverId: res.data.id });
+      setActiveIds((p) => [...p, id]);
+    } catch (e) {
+      patchSource(id, { status: "error" });
+      throw e;
+    }
+  };
+
+  const readySources   = sources.filter((s) => s.status === "ready");
+  const loadingSources = sources.filter((s) => s.status === "uploading");
+  const selectedReady  = readySources.filter((s) => activeIds.includes(s.id));
+  const canStart = selectedReady.length > 0;
+
+  const TABS = [
+    { id: "files",  label: "📁  FILES" },
+    { id: "sheets", label: "🔗  GOOGLE SHEETS" },
+    { id: "db",     label: "🗄  DATABASE" },
+  ];
+
+  return (
+    <div style={s.page}>
+
+      {/* ── LEFT: Hero panel ─────────────────────────── */}
+      <section style={s.hero}>
+        {/* Decorative grid lines */}
+        <div style={s.gridOverlay} aria-hidden />
+
+        <div style={s.heroContent}>
+          <p style={s.heroEyebrow}>AI-POWERED INTELLIGENCE</p>
+          <h1 style={s.heroTitle}>
+            TURN DATA INTO<br />
+            <span style={s.heroTitleAccent}>CLEAR INSIGHT</span>
+          </h1>
+          <p style={s.heroSub}>
+            Upload your datasets and let the AI surface what matters.
+            Ask questions in plain English and explore analytics visually
+            — all in one place.
+          </p>
+
+          {/* Feature pills */}
+          <div style={s.featurePills}>
+            {["Financial Analysis", "Document Q&A", "Live Sources", "Anomaly Detection"].map((f) => (
+              <span key={f} style={s.pill}>{f}</span>
+            ))}
+          </div>
+        </div>
+
+        {/* Robot illustration */}
+        <div style={s.roboWrap} aria-hidden>
+          <RobotSVG />
+        </div>
+      </section>
+
+      {/* ── RIGHT: Olive card ─────────────────────────── */}
+      <section style={s.card}>
+
+        <div style={s.cardInner}>
+          <h2 style={s.cardTitle}>ADD YOUR DATA</h2>
+          <p style={s.cardSub}>Upload files or connect a live data source</p>
+
+          {/* Tabs */}
+          <div style={s.tabRow}>
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                className={`input-tab${tab === t.id ? " active-tab" : ""}`}
+                style={{ ...s.tab, ...(tab === t.id ? s.tabActive : {}) }}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div style={s.tabContent}>
+            {tab === "files"  && <FileDropzone onFiles={handleFiles} uploading={anyUploading} />}
+            {tab === "sheets" && <GoogleSheetsForm onConnect={handleSheets} />}
+            {tab === "db"     && <DatabaseForm onConnect={handleDB} />}
+          </div>
+
+          {/* Sources section */}
+          <div style={s.sourcesSection}>
+            <p style={s.sourcesLabel}>Your sources</p>
+            <div style={s.sourceList}>
+              {sources.length === 0 ? (
+                <div style={s.emptyRow}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.4">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                    <line x1="9" y1="13" x2="15" y2="13"/><line x1="12" y1="10" x2="12" y2="16"/>
+                  </svg>
+                  <span style={s.emptyText}>No sources added yet</span>
+                </div>
+              ) : (
+                sources.map((src) => (
+                  <SourceCard
+                    key={src.id}
+                    source={src}
+                    selected={activeIds.includes(src.id)}
+                    onToggle={toggleSelect}
+                  />
+                ))
+              )}
+            </div>
+
+            {loadingSources.length > 0 && (
+              <div style={s.statusStrip}>
+                <span style={s.statusDot} />
+                {loadingSources.length} source{loadingSources.length > 1 ? "s" : ""} uploading…
+              </div>
+            )}
+          </div>
+
+          {/* Start button */}
+          <button
+            style={{ ...s.startBtn, opacity: canStart ? 1 : 0.45, cursor: canStart ? "pointer" : "not-allowed" }}
+            onClick={onStartChat}
+            disabled={!canStart}
+          >
+            START TO ANALYSING
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="5" y1="12" x2="19" y2="12"/>
+              <polyline points="12 5 19 12 12 19"/>
+            </svg>
+          </button>
+
+          {!canStart && sources.length > 0 && (
+            <p style={s.startHint}>
+              {loadingSources.length > 0
+                ? "⏳ Wait for uploads to finish"
+                : "Select at least one source above"}
+            </p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ── Robot SVG illustration ───────────────────────────────────────────
+function RobotSVG() {
+  return (
+    <svg
+      viewBox="0 0 200 260"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ width: "100%", maxWidth: 220, animation: "roboFloat 4s ease-in-out infinite", filter: "drop-shadow(0 8px 24px rgba(131,151,5,0.35))" }}
+    >
+      {/* Antenna */}
+      <line x1="100" y1="10" x2="100" y2="38" stroke="#839705" strokeWidth="3" strokeLinecap="round"/>
+      <circle cx="100" cy="7" r="5" fill="#839705"/>
+      <circle cx="100" cy="7" r="3" fill="#c8e000" style={{ animation: "blink 3s ease infinite" }}/>
+
+      {/* Head */}
+      <rect x="62" y="38" width="76" height="62" rx="14" fill="#41431B" stroke="#839705" strokeWidth="2"/>
+      {/* Head shine */}
+      <rect x="68" y="43" width="30" height="6" rx="3" fill="rgba(255,255,255,0.08)"/>
+
+      {/* Eyes */}
+      <circle cx="85" cy="65" r="13" fill="#1a1f0a"/>
+      <circle cx="115" cy="65" r="13" fill="#1a1f0a"/>
+      {/* Eye glow rings */}
+      <circle cx="85" cy="65" r="10" fill="none" stroke="#00cfff" strokeWidth="1.5" opacity="0.7"/>
+      <circle cx="115" cy="65" r="10" fill="none" stroke="#00cfff" strokeWidth="1.5" opacity="0.7"/>
+      {/* Pupils */}
+      <circle cx="85" cy="65" r="5" fill="#00cfff" style={{ animation: "blink 4s ease infinite" }}/>
+      <circle cx="115" cy="65" r="5" fill="#00cfff" style={{ animation: "blink 4s ease infinite 0.3s" }}/>
+      {/* Eye shine */}
+      <circle cx="88" cy="62" r="2" fill="white" opacity="0.9"/>
+      <circle cx="118" cy="62" r="2" fill="white" opacity="0.9"/>
+
+      {/* Mouth panel */}
+      <rect x="78" y="83" width="44" height="10" rx="5" fill="#1a1f0a"/>
+      {[82,89,96,103,110,116].map((x, i) => (
+        <rect key={i} x={x} y="85" width="3" height="6" rx="1" fill="#839705" opacity={i % 2 === 0 ? 0.9 : 0.4}/>
+      ))}
+
+      {/* Neck */}
+      <rect x="92" y="100" width="16" height="12" rx="3" fill="#313E17" stroke="#839705" strokeWidth="1"/>
+
+      {/* Body */}
+      <rect x="48" y="112" width="104" height="90" rx="16" fill="#41431B" stroke="#839705" strokeWidth="2"/>
+
+      {/* Chest panel */}
+      <rect x="68" y="124" width="64" height="42" rx="8" fill="#1a1f0a" stroke="rgba(131,151,5,0.4)" strokeWidth="1"/>
+      {/* Chest screen lines */}
+      {[130,138,146,154,160].map((y, i) => (
+        <line key={i} x1="74" y1={y} x2={74 + 30 + (i % 3) * 12} y2={y} stroke="#839705" strokeWidth="1.5" opacity={0.3 + i*0.1} strokeLinecap="round"/>
+      ))}
+      {/* Chest indicator dot */}
+      <circle cx="122" cy="133" r="5" fill="#839705" opacity="0.9" style={{ animation: "blink 2s ease infinite" }}/>
+
+      {/* Side vents */}
+      {[120,128,136].map((y, i) => (
+        <rect key={i} x="52" y={y} width="10" height="4" rx="2" fill="#313E17" stroke="rgba(131,151,5,0.3)" strokeWidth="1"/>
+      ))}
+      {[120,128,136].map((y, i) => (
+        <rect key={i} x="138" y={y} width="10" height="4" rx="2" fill="#313E17" stroke="rgba(131,151,5,0.3)" strokeWidth="1"/>
+      ))}
+
+      {/* Left arm */}
+      <rect x="16" y="118" width="28" height="70" rx="12" fill="#41431B" stroke="#839705" strokeWidth="1.5"/>
+      <rect x="20" y="128" width="20" height="8" rx="4" fill="#1a1f0a"/>
+      {/* Left hand — waving */}
+      <ellipse cx="30" cy="196" rx="14" ry="10" fill="#313E17" stroke="#839705" strokeWidth="1.5" style={{ transform: "rotate(-15deg)", transformOrigin: "30px 196px" }}/>
+      {/* Fingers */}
+      {[-6,-2,2,6].map((x, i) => (
+        <rect key={i} x={30+x-2} y="184" width="4" height="12" rx="2" fill="#41431B" stroke="#839705" strokeWidth="1"/>
+      ))}
+
+      {/* Right arm */}
+      <rect x="156" y="118" width="28" height="70" rx="12" fill="#41431B" stroke="#839705" strokeWidth="1.5"/>
+      <rect x="160" y="128" width="20" height="8" rx="4" fill="#1a1f0a"/>
+      <ellipse cx="170" cy="196" rx="14" ry="10" fill="#313E17" stroke="#839705" strokeWidth="1.5"/>
+
+      {/* Legs */}
+      <rect x="70" y="202" width="26" height="42" rx="10" fill="#41431B" stroke="#839705" strokeWidth="1.5"/>
+      <rect x="104" y="202" width="26" height="42" rx="10" fill="#41431B" stroke="#839705" strokeWidth="1.5"/>
+
+      {/* Feet */}
+      <rect x="64" y="236" width="38" height="18" rx="9" fill="#313E17" stroke="#839705" strokeWidth="1.5"/>
+      <rect x="98" y="236" width="38" height="18" rx="9" fill="#313E17" stroke="#839705" strokeWidth="1.5"/>
+
+      {/* Ground shadow */}
+      <ellipse cx="100" cy="258" rx="58" ry="6" fill="rgba(131,151,5,0.15)"/>
+    </svg>
+  );
+}
+
+// ── Styles ───────────────────────────────────────────────────────────
+const s = {
+  page: {
+    flex: 1,
+    display: "grid",
+    gridTemplateColumns: "1fr 1.05fr",
+    overflow: "hidden",
+  },
+
+  /* Left hero */
+  hero: {
+    position: "relative",
+    background: "linear-gradient(160deg, #f8f6f0 0%, #eae7dc 50%, #ddd9cc 100%)",
+    borderRight: "1px solid rgba(0,0,0,0.08)",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "space-between",
+    padding: "48px 44px 0",
+    overflow: "hidden",
+  },
+  gridOverlay: {
+    position: "absolute", inset: 0, pointerEvents: "none",
+    backgroundImage: `
+      linear-gradient(rgba(131,151,5,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(131,151,5,0.06) 1px, transparent 1px)
+    `,
+    backgroundSize: "48px 48px",
+  },
+  heroContent: {
+    position: "relative", zIndex: 1,
+    display: "flex", flexDirection: "column", gap: 20,
+  },
+  heroEyebrow: {
+    fontFamily: "var(--font-ui)",
+    fontSize: 11, fontWeight: 700, letterSpacing: "2.5px",
+    color: "var(--accent)", textTransform: "uppercase",
+  },
+  heroTitle: {
+    fontFamily: "var(--font-display)",
+    fontSize: 52, lineHeight: 1.0,
+    color: "var(--text)",
+    letterSpacing: "1px",
+  },
+  heroTitleAccent: {
+    color: "var(--card)",
+  },
+  heroSub: {
+    fontFamily: "var(--font-body)",
+    fontSize: 14, lineHeight: 1.75,
+    color: "var(--text-muted)",
+    maxWidth: 360,
+  },
+  featurePills: {
+    display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4,
+  },
+  pill: {
+    fontFamily: "var(--font-ui)", fontSize: 11, fontWeight: 600,
+    letterSpacing: "0.8px", textTransform: "uppercase",
+    padding: "5px 12px", borderRadius: 20,
+    border: "1px solid rgba(131,151,5,0.4)",
+    color: "var(--card)",
+    background: "rgba(131,151,5,0.1)",
+  },
+  roboWrap: {
+    display: "flex", justifyContent: "center", alignItems: "flex-end",
+    paddingBottom: 0,
+    animation: "roboGlow 3s ease-in-out infinite",
+    flex: 1,
+    minHeight: 0,
+  },
+
+  /* Right card */
+  card: {
+    background: "var(--card)",
+    overflowY: "auto",
+    display: "flex",
+    flexDirection: "column",
+    position: "relative",
+  },
+  cardInner: {
+    flex: 1,
+    display: "flex", flexDirection: "column", gap: 16,
+    padding: "40px 36px 32px",
+  },
+  cardTitle: {
+    fontFamily: "var(--font-display)",
+    fontSize: 28, letterSpacing: "2px",
+    color: "var(--text-on-dark)",
+    textAlign: "center",
+  },
+  cardSub: {
+    fontFamily: "var(--font-body)",
+    fontSize: 13, color: "var(--text-on-dark-muted)",
+    textAlign: "center", marginTop: -8,
+  },
+
+  /* Tabs */
+  tabRow: {
+    display: "flex", gap: 6, flexWrap: "wrap",
+  },
+  tab: {
+    padding: "8px 14px", borderRadius: "var(--radius)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.06)",
+    color: "var(--text-on-dark-muted)",
+    fontSize: 11, fontFamily: "var(--font-ui)", fontWeight: 700,
+    letterSpacing: "1px",
+    cursor: "pointer", transition: "all 0.15s",
+  },
+  tabActive: {
+    background: "var(--accent)",
+    borderColor: "var(--accent)",
+    color: "#fff",
+  },
+  tabContent: {
+    flex: "0 0 auto",
+  },
+
+  /* Sources */
+  sourcesSection: {
+    display: "flex", flexDirection: "column", gap: 8,
+    flex: 1,
+  },
+  sourcesLabel: {
+    fontFamily: "var(--font-display)",
+    fontSize: 16, letterSpacing: "1.5px",
+    color: "var(--text-on-dark)",
+  },
+  sourceList: {
+    display: "flex", flexDirection: "column", gap: 6,
+    minHeight: 56,
+  },
+  emptyRow: {
+    display: "flex", alignItems: "center", gap: 10,
+    padding: "14px 16px", borderRadius: "var(--radius)",
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    color: "var(--text-on-dark-muted)",
+  },
+  emptyText: {
+    fontFamily: "var(--font-ui)", fontSize: 13, fontWeight: 500,
+    letterSpacing: "0.5px",
+  },
+  statusStrip: {
+    display: "flex", alignItems: "center", gap: 8,
+    fontSize: 12, fontFamily: "var(--font-ui)", fontWeight: 600,
+    letterSpacing: "0.5px",
+    color: "var(--text-on-dark-muted)",
+    padding: "8px 12px", borderRadius: "var(--radius)",
+    background: "rgba(131,151,5,0.12)",
+    border: "1px solid rgba(131,151,5,0.25)",
+  },
+  statusDot: {
+    width: 7, height: 7, borderRadius: "50%", background: "var(--accent)",
+    animation: "dotPulse 1.3s ease infinite",
+  },
+
+  /* Start button */
+  startBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
+    padding: "14px 24px", borderRadius: "var(--radius-lg)", border: "none",
+    background: "#1a1f0a",
+    color: "var(--text-on-dark)",
+    fontSize: 14, fontFamily: "var(--font-display)", letterSpacing: "2px",
+    cursor: "pointer",
+    transition: "opacity 0.15s, transform 0.1s",
+    marginTop: "auto",
+  },
+  startHint: {
+    fontSize: 11, fontFamily: "var(--font-ui)",
+    color: "var(--text-on-dark-muted)",
+    textAlign: "center", letterSpacing: "0.5px",
+  },
+};
+
+// Topbar.jsx — olive military navbar matching brand design
+export default function Topbar({ phase, onBack }) {
+  return (
+    <header style={s.bar}>
+      {/* ── Logo ── */}
+      <div style={s.logoRow}>
+        <div style={s.logoBox}>
+          {/* Oval logo badge matching screenshot style */}
+          <div style={s.logoBadge}>
+            {/* Silhouette figure (SVG placeholder matching the detective/person in screenshot) */}
+            <svg width="28" height="32" viewBox="0 0 28 32" fill="none" style={{ flexShrink: 0 }}>
+              {/* Body silhouette */}
+              <ellipse cx="14" cy="8" rx="5" ry="5.5" fill="#d8dfc4" opacity="0.9"/>
+              <path d="M4 28 C4 20 8 17 14 17 C20 17 24 20 24 28" fill="#d8dfc4" opacity="0.9"/>
+              {/* Hat brim */}
+              <ellipse cx="14" cy="5" rx="7" ry="2.2" fill="#1a2208" opacity="0.85"/>
+              <rect x="10" y="1.5" width="8" height="5" rx="2" fill="#1a2208" opacity="0.85"/>
+            </svg>
+            <div style={s.logoTextCol}>
+              <span style={s.logoWord1}>intelli</span>
+              <span style={s.logoWord2}>nsight</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Breadcrumb — only visible in processing/chat */}
+        {phase !== "upload" && (
+          <div style={s.crumb}>
+            <span style={{ ...s.crumbStep, ...(phase === "upload" ? s.crumbActive : s.crumbDone) }}>
+              01 &nbsp;Add Data
+            </span>
+            <span style={s.crumbSep}>›</span>
+            <span style={{ ...s.crumbStep, ...(phase !== "upload" ? s.crumbActive : {}) }}>
+              02 &nbsp;Analyse
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Right actions ── */}
+      <div style={s.right}>
+        {phase === "chat" && (
+          <button style={s.backBtn} onClick={onBack}>
+            ← Back to sources
+          </button>
+        )}
+        <button style={s.notifBtn}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/>
+          </svg>
+          NOTIFICATIONS
+        </button>
+        <button style={s.loginBtn}>LOG IN</button>
+      </div>
+    </header>
+  );
+}
+
+const s = {
+  bar: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    height: 70, padding: "0 28px", flexShrink: 0,
+    background: "var(--navy)",
+    borderBottom: "3px solid var(--accent)",
+    zIndex: 20,
+    position: "relative",
+  },
+  logoRow: {
+    display: "flex", alignItems: "center", gap: 24, flex: 1,
+  },
+  logoBox: {
+    display: "flex", alignItems: "center",
+  },
+  logoBadge: {
+    display: "flex", alignItems: "center", gap: 6,
+    background: "rgba(255,255,255,0.06)",
+    border: "2px solid var(--accent)",
+    borderRadius: "50px",
+    padding: "6px 16px 6px 10px",
+    position: "relative",
+    overflow: "hidden",
+  },
+  logoTextCol: {
+    display: "flex", flexDirection: "column", lineHeight: 1,
+  },
+  logoWord1: {
+    fontFamily: "var(--font-stamp)",
+    fontSize: 15, fontWeight: 400,
+    color: "var(--text-on-dark)",
+    letterSpacing: "0.5px",
+  },
+  logoWord2: {
+    fontFamily: "var(--font-stamp)",
+    fontSize: 15, fontWeight: 400,
+    color: "var(--accent-light)",
+    letterSpacing: "0.5px",
+  },
+
+  crumb: {
+    display: "flex", alignItems: "center", gap: 8,
+  },
+  crumbStep: {
+    fontSize: 11, fontWeight: 600, letterSpacing: "1px",
+    textTransform: "uppercase", transition: "color 0.3s",
+    fontFamily: "var(--font-ui)",
+  },
+  crumbActive: { color: "var(--text-on-dark)" },
+  crumbDone:   { color: "var(--text-on-dark-muted)" },
+  crumbSep:    { color: "var(--text-on-dark-muted)", fontSize: 14 },
+
+  right: {
+    display: "flex", alignItems: "center", gap: 10,
+  },
+  backBtn: {
+    background: "transparent",
+    border: "1px solid var(--border-dark)",
+    color: "var(--text-on-dark-muted)",
+    fontSize: 12, fontFamily: "var(--font-ui)", fontWeight: 600,
+    letterSpacing: "0.5px",
+    padding: "7px 14px", borderRadius: "var(--radius)",
+    cursor: "pointer", transition: "all 0.15s",
+  },
+  notifBtn: {
+    display: "flex", alignItems: "center", gap: 6,
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.15)",
+    color: "var(--text-on-dark)",
+    fontSize: 11, fontFamily: "var(--font-ui)", fontWeight: 700,
+    letterSpacing: "1.2px",
+    padding: "8px 16px", borderRadius: 30,
+    cursor: "pointer", transition: "all 0.15s",
+  },
+  loginBtn: {
+    background: "#1a1f0a",
+    border: "1px solid rgba(255,255,255,0.2)",
+    color: "var(--text-on-dark)",
+    fontSize: 12, fontFamily: "var(--font-ui)", fontWeight: 700,
+    letterSpacing: "1.5px",
+    padding: "8px 22px", borderRadius: 30,
+    cursor: "pointer", transition: "all 0.15s",
+  },
+};
+
+service/api.js
+// import axios from "axios";
+
+// const API = axios.create({
+//   baseURL: "http://localhost:8000"
+// });
+
+// export const uploadStructured = (file) => {
+//   const form = new FormData();
+//   form.append("file", file);
+
+//   return API.post("/upload/structured", form, {
+//     headers: { "Content-Type": "multipart/form-data" }
+//   });
+// };
+
+// export const uploadDocument = (file) => {
+//   const form = new FormData();
+//   form.append("file", file);
+
+//   return API.post("/upload/document", form, {
+//     headers: { "Content-Type": "multipart/form-data" }
+//   });
+// };
+
+// export const getStructured = () =>
+//   API.get("/upload/list/structured");
+
+// export const getDocuments = () =>
+//   API.get("/upload/list/documents");
+
+// // ✅ FIXED: clean payload
+// export const sendQuery = (payload) =>
+//   API.post("/query/", payload);
+
+import axios from "axios";
+
+const API = axios.create({ baseURL: "http://localhost:8000" });
+
+// ── File Uploads ───────────────────────────────────────────────────
+export const uploadStructured = (file) => {
+  const form = new FormData();
+  form.append("file", file);
+  return API.post("/upload/structured", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
+
+export const uploadDocument = (file) => {
+  const form = new FormData();
+  form.append("file", file);
+  return API.post("/upload/document", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
+export const getDocumentStatus = (documentId) =>
+  API.get(`/upload/list/documents`).then((res) => {
+    const doc = res.data.find((d) => d.id === documentId);
+    return doc?.is_indexed ?? 0;   // 0 = processing, 1 = ready, 2 = error
+  });
+// ── Live Data Sources ──────────────────────────────────────────────
+export const connectGoogleSheets = (url, sheet_name = null) =>
+  API.post("/upload/google-sheets", { url, sheet_name });
+
+export const connectDatabase = (connection_string, table_name, query = null) =>
+  API.post("/upload/database", { connection_string, table_name, query });
+
+// ── Query ──────────────────────────────────────────────────────────
+export const sendQuery = ({ query, data_source_id = null, document_id = null }) =>
+  API.post("/query/", { query, data_source_id, document_id });
+
+  utils/helper.js
+  // ── File type detection ────────────────────────────────────────────
+export const getFileCategory = (filename) => {
+  const ext = filename.split(".").pop().toLowerCase();
+  if (["pdf", "docx", "txt"].includes(ext)) return "document";
+  if (["xlsx", "xls", "csv"].includes(ext)) return "structured";
+  return null;
+};
+
+export const SOURCE_ICONS = {
+  document:  "📄",
+  structured:"📊",
+  sheets:    "🔗",
+  database:  "🗄️",
+};
+
+export const SOURCE_LABELS = {
+  document:  "Document",
+  structured:"Spreadsheet",
+  sheets:    "Google Sheets",
+  database:  "SQL Database",
+};
+
+// ── Mode colours ───────────────────────────────────────────────────
+export const getModeColor = (activeSources) => {
+  const hasS = activeSources.some((s) => ["structured", "sheets", "database"].includes(s.type));
+  const hasD = activeSources.some((s) => s.type === "document");
+  if (hasS && hasD) return "#a78bfa"; // hybrid
+  if (hasS) return "#6366f1";         // structured
+  return "#06b6d4";                   // document
+};
+
+// ── Unique ID (session-scoped) ─────────────────────────────────────
+let _counter = 0;
+export const nextId = () => ++_counter;
+
+index.css
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}

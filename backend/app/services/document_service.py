@@ -4,7 +4,7 @@
 from sqlalchemy.orm import Session
 from app.models.document import Document
 from app.agents.unstructured_agent.ingestion import DocumentIngestionAgent
-from backend.app.agents.unstructured_agent.chunking import ChunkingAgent
+from app.agents.unstructured_agent.chunking import ChunkingAgent
 from app.agents.unstructured_agent.embedding import EmbeddingAgent
 
 class DocumentService:
@@ -32,13 +32,22 @@ class DocumentService:
         chunks = self.chunker.chunk_with_metadata(text, doc_id)
 
         # Step 4: Embed and store in Pinecone
-        count = self.embedder.upsert_chunks(chunks)
-
+        try:
+            count = self.embedder.upsert_chunks(chunks)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Embedding failed: {str(e)}"
+            }
         # Step 5: Mark as indexed
-        doc.is_indexed = 1
-        doc.page_count = text.count("[Page ")
+        if count > 0:
+            doc.is_indexed = 1
+            doc.page_count = text.count("[Page ")
+            db.commit()
         # this page_count method ("[page") used for measure the page count of the document(after extract text)
         db.commit()
+
+        print(f"✅ Document {doc_id} processed: {count} chunks stored")
 
         return {
             "success":      True,

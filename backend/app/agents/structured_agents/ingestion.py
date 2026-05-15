@@ -4,7 +4,7 @@
 
 import pandas as pd
 from typing import Optional
-from base import BaseAgent
+from  app.agents.base import BaseAgent
 
 class StructuredIngestionAgent(BaseAgent):
 

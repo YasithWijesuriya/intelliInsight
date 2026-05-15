@@ -6,6 +6,9 @@ from app.database import get_db
 from app.config import settings
 from app.models.data_source import DataSource, SourceType
 from app.models.document import Document
+from app.services.document_service import DocumentService
+from app.tasks.document_tasks import process_doc_task
+from fastapi import BackgroundTasks
 import os, shutil, uuid
 
 router = APIRouter(prefix="/upload", tags=["Upload"])
@@ -76,6 +79,7 @@ async def upload_structured_file(
 
 @router.post("/document")
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):  
@@ -106,9 +110,32 @@ async def upload_document(
     db.commit()
     db.refresh(record)
 
-    return {"message": "Document uploaded successfully", "id": record.id, "filename": file.filename}
+    background_tasks.add_task(
+        process_doc_task,
+        record.id,
+        file_path
+    )
 
+    return {
+        "message": "Document uploaded. Processing in background...",
+        "id": record.id
+    }
 
+@router.get("/document/{doc_id}/status")
+async def document_status(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    return {
+        "id":        doc.id,
+        "filename":  doc.filename,
+        "is_indexed": doc.is_indexed,
+        "status": (
+            "processing" if doc.is_indexed == 0
+            else "ready"  if doc.is_indexed == 1
+            else "error"
+        )
+    }
 
 @router.post("/google-sheets")
 async def connect_google_sheets(

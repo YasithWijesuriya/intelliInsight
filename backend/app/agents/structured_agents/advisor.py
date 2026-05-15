@@ -1,66 +1,82 @@
-# PURPOSE: Generates strategic business recommendations
-# This is the FINAL agent in the structured pipeline
-# It receives results from all previous agents and synthesizes recommendations
+# PURPOSE: Generates strategic recommendations from structured data analysis results
+# IMPROVEMENTS:
+#   - Shorter, tighter prompt — no "CFO briefing document" roleplay that inflates output
+#   - Hard limits on output sections and length
+#   - Instructs the model to omit sections it has no real evidence for
+#   - Prevents hallucinated benchmarks and industry comparisons
 
-from typing import Dict, Any, Optional
+# backend/app/agents/structured_agents/advisor.py
+
+from typing import Dict, Any,Optional
 from langchain_core.messages import HumanMessage
 from app.agents.base import BaseAgent
+
 
 class AdvisorAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("AdvisorAgent")
 
-    def detect_language(self, text: str) -> str:
-        sinhala_chars = any('\u0D80' <= c <= '\u0DFF' for c in text)
-
-        if sinhala_chars:
-            return "sinhala"
-        return "english"
-
     async def run(self, data: Dict[str, Any],context:Optional[str]=None) -> Dict:
-        # data contains results from ALL previous agents:
-        # data["trend"]    = TrendAgent result
-        # data["anomaly"]  = AnomalyAgent result
-        # data["kpi"]      = KPIEngine result
-        # data["financial"]= FinancialAgent result
-        user_input = context or ""
+        trend_result    = data.get("trend",    {}).get("result", {})
+        anomaly_result  = data.get("anomaly",  {}).get("result", {})
+        kpi_result      = data.get("kpi",      {}).get("result", {})
+        financial_result= data.get("financial",{}).get("result", {})
 
-        language = self.detect_language(user_input)
+        trend_summary    = trend_result.get("ai_analysis",    "").strip()
+        anomaly_summary  = anomaly_result.get("explanation",  "").strip()
+        kpi_summary      = kpi_result.get("interpretation",   "").strip()
+        financial_summary= financial_result.get("assessment", "").strip()
 
-        trend_summary    = data.get("trend",    {}).get("result", {}).get("ai_analysis", "N/A")
-        anomaly_summary  = data.get("anomaly",  {}).get("result", {}).get("explanation", "N/A")
-        kpi_summary      = data.get("kpi",      {}).get("result", {}).get("interpretation", "N/A")
-        financial_summary= data.get("financial",{}).get("result", {}).get("assessment", "N/A")
-        
-       
-        prompt = f"""You are a Chief Financial Officer (CFO) and strategic business advisor.
-                        You have received analysis from multiple AI agents. Synthesize all findings into
-                        actionable strategic recommendations.
+        # Detect schema from KPI result for context
+        schema = kpi_result.get("schema_detected", "unknown")
+        kpis   = kpi_result.get("calculated_kpis", {})
 
-                        IMPORTANT RULES:
-                            - Respond ONLY in {language}
+        # Build only sections that have real content
+        sections = []
+        if trend_summary:
+            sections.append(f"TREND ANALYSIS:\n{trend_summary}")
+        if anomaly_summary:
+            sections.append(f"ANOMALY DETECTION:\n{anomaly_summary}")
+        if kpi_summary:
+            sections.append(f"KPI INTERPRETATION:\n{kpi_summary}")
+        if financial_summary:
+            sections.append(f"FINANCIAL RATIOS:\n{financial_summary}")
 
-                        TREND ANALYSIS:
-                        {trend_summary}
+        if not sections:
+            return self._format_result("AdvisorAgent", {
+                "recommendations": "Insufficient analysis data to generate recommendations."
+            }, confidence=0.3)
 
-                        ANOMALY DETECTION:
-                        {anomaly_summary}
+        analysis_block = "\n\n".join(sections)
 
-                        KPI ASSESSMENT:
-                        {kpi_summary}
+        schema_note = (
+            "Note: The data is a transaction log (not a balance sheet). "
+            "Interpret findings accordingly — revenue and costs are per-transaction."
+            if schema == "transaction_log"
+            else ""
+        )
 
-                        FINANCIAL RATIO ANALYSIS:
-                        {financial_summary}
+        prompt = f"""You are a business analyst reviewing findings from multiple analysis agents.
 
-                        Based on ALL of the above, provide:
-                        1. EXECUTIVE SUMMARY (3 sentences max — what leadership needs to know NOW)
-                        2. TOP 5 PRIORITY ACTIONS (ordered by urgency, specific and actionable)
-                        3. RISK ALERTS (anything requiring immediate attention)
-                        4. 90-DAY ROADMAP (what to focus on in the next 3 months)
-                        5. GROWTH OPPORTUNITIES (what is working well that should be doubled down on)
+{schema_note}
 
-                        Format as a professional CFO briefing document."""
+Analysis findings:
+{analysis_block}
+
+Raw KPIs calculated: {kpis}
+
+STRICT RULES:
+- Base your response ONLY on the findings and KPIs above.
+- Do NOT invent numbers, benchmarks, or trends not present above.
+- Keep total response under 200 words.
+- Use this structure (skip any section you have no real evidence for):
+
+**Key Findings** (2–3 bullets — only what the data clearly shows)
+
+**Priority Actions** (2–3 specific actions directly supported by the findings)
+
+**Risks** (only if anomalies or negative trends were actually detected)"""
 
         response = await self.llm.ainvoke([HumanMessage(content=prompt)])
 

@@ -39,14 +39,14 @@ class ChunkingAgent:
 
         return chunks
 
-    def chunk_with_metadata(self, text: str, doc_id: int) -> List[dict]:
+    def chunk_with_metadata(self, text: str, document_id: int) -> List[dict]:
         # Returns chunks WITH their metadata for Pinecone
         chunks = self.chunk(text)
         return [
             {
-                "id":          f"doc{doc_id}_chunk{i}",
+                "id":          f"doc{document_id}_chunk{i}",
                 "text":        chunk,
-                "doc_id":      doc_id,
+                "doc_id":      document_id,
                 "chunk_index": i,
                 "char_count":  len(chunk)
             }

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # API
     BACKEND_URL: str = "http://localhost:8000"
-    FRONTEND_URL: str = "http://localhost:3000"
+    FRONTEND_URL: str = "http://localhost:5173"
     API_PORT: int = 8000
 
     # OpenAI
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     OPENAI_MAX_TOKENS: int = 2000
 
     # Pinecone
-    PINECONE_API_KEY: str =""
+    PINECONE_API_KEY: str 
     PINECONE_ENVIRONMENT: str =""
     PINECONE_INDEX_NAME: str = "intelliinsight"
     PINECONE_DIMENSION: int = 1536
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: List[str] = ["http://localhost:5173"]
 
     class Config:
         env_file = ".env"
